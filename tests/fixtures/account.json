@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "account_id": 1001,
+  "repositories": [
+    {
+      "repository_id": 2001,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "Rust"
+    },
+    {
+      "repository_id": 2002,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "Rust"
+    },
+    {
+      "repository_id": 2003,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "Rust"
+    },
+    {
+      "repository_id": 2004,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "Python"
+    },
+    {
+      "repository_id": 2005,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": "C++"
+    },
+    {
+      "repository_id": 2006,
+      "visibility": "private",
+      "is_fork": false,
+      "primary_language": "Rust"
+    },
+    {
+      "repository_id": 2007,
+      "visibility": "public",
+      "is_fork": true,
+      "primary_language": "Rust"
+    },
+    {
+      "repository_id": 2008,
+      "visibility": "public",
+      "is_fork": false,
+      "primary_language": null
+    },
+    {
+      "repository_id": 2009,
+      "visibility": "internal",
+      "is_fork": false,
+      "primary_language": "Rust"
+    }
+  ]
+}
