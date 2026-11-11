@@ -16,6 +16,8 @@ use crate::colorway::{Colorway, Palette};
 use crate::galaxy::{GalaxyDevelopment, STAGE_COUNT, calculate_stage};
 use crate::markings::{StreakMarks, calculate_star_count, calculate_streak_marks};
 use crate::motion;
+use crate::motion_state;
+use crate::motion_state::MotionState;
 use crate::theme::Theme;
 
 /// Width of the native canvas every galaxy is drawn on.
@@ -47,6 +49,10 @@ const CORE_RADIUS: f64 = 17.0;
 const CORE_HALO_RADIUS: f64 = 38.0;
 const DISK_FALLOFF_RADIUS: f64 = 42.0;
 const ARM_FALLOFF_RADIUS: f64 = 52.0;
+/// Peak added brightness of a flare blooming out of the galaxy's core.
+const FLARE_GLOW_PEAK: f64 = 1.6;
+/// Radius the flare's glow fades across, in canvas pixels.
+const FLARE_GLOW_RADIUS: f64 = 42.0;
 /// Peak brightness the comet trail adds at full strength.
 const TRAIL_PEAK_BRIGHTNESS: f64 = 0.55;
 /// Half-width of the comet trail across the arm, in pixels.
@@ -101,16 +107,21 @@ pub fn render_galaxy_frame(
 ) -> GalaxyFrame {
     let palette = build_palette(colorway.palette(theme));
     let pose = GalaxyPose::at_frame(development.identity_seed, frame_index);
+    let motion_state = motion_state::select_motion_state(development);
+    let brightness_scale = motion::brightness_scale(motion_state);
+    let flare_intensity =
+        motion::flare_intensity(development.identity_seed, frame_index, motion_state);
     let stage_scale = stage_scale(calculate_stage(development.total_contributions));
     let streak_marks = calculate_streak_marks(development);
     let mut brightness = vec![0.0; PIXEL_COUNT];
-    paint_galaxy(&mut brightness, &pose, stage_scale);
+    paint_galaxy(&mut brightness, &pose, stage_scale, flare_intensity);
     paint_trail(&mut brightness, &pose, stage_scale, &streak_marks);
     paint_stars(
         &mut brightness,
         &pose,
         development.identity_seed,
         frame_index,
+        motion_state,
         stage_scale,
         calculate_star_count(development.streaks.longest.len()),
     );
@@ -122,7 +133,8 @@ pub fn render_galaxy_frame(
                 pixel_index % FRAME_WIDTH_PIXELS as usize,
                 pixel_index / FRAME_WIDTH_PIXELS as usize,
             );
-            let position = intensity.clamp(0.0, 1.0) * (PALETTE_LEVELS - 1) as f64;
+            let position =
+                (intensity * brightness_scale).clamp(0.0, 1.0) * (PALETTE_LEVELS - 1) as f64;
             let level = (position + threshold).floor() as usize;
             palette[level.min(PALETTE_LEVELS - 1)]
         })
@@ -204,7 +216,7 @@ fn stage_scale(stage: u8) -> f64 {
     outer_radius / BASE_OUTER_RADIUS
 }
 
-fn paint_galaxy(brightness: &mut [f64], pose: &GalaxyPose, scale: f64) {
+fn paint_galaxy(brightness: &mut [f64], pose: &GalaxyPose, scale: f64, flare_intensity: f64) {
     let outer_radius = BASE_OUTER_RADIUS * scale;
     let fade_start = outer_radius * FADE_START_FRACTION;
     for (pixel_index, value) in brightness.iter_mut().enumerate() {
@@ -224,7 +236,11 @@ fn paint_galaxy(brightness: &mut [f64], pose: &GalaxyPose, scale: f64) {
             + 0.16 * value_noise(pose.texture_seed, disc_x * 0.11, disc_y * 0.11, 0)
             + 0.06 * value_noise(pose.texture_seed, disc_x * 0.31, disc_y * 0.31, 1);
         let fade = 1.0 - smooth_step(screen_radius, fade_start, outer_radius);
-        *value = (core + (disk + arm) * texture) * fade;
+        let flare = flare_intensity
+            * FLARE_GLOW_PEAK
+            * (-(screen_radius / (FLARE_GLOW_RADIUS * 0.67)).powi(2)).exp()
+            * (1.0 - smooth_step(screen_radius, FLARE_GLOW_RADIUS * 0.83, FLARE_GLOW_RADIUS));
+        *value = (core + (disk + arm) * texture) * fade + flare;
     }
 }
 
@@ -281,6 +297,7 @@ fn paint_stars(
     pose: &GalaxyPose,
     identity_seed: u64,
     frame_index: u32,
+    state: MotionState,
     scale: f64,
     star_count: usize,
 ) {
@@ -290,7 +307,7 @@ fn paint_stars(
         let radius = star_outer_radius * rng.unit().powf(1.35);
         let angle = rng.unit() * TAU;
         let peak = (0.25 + 0.75 * rng.unit().powi(2))
-            * motion::twinkle_scale(identity_seed, star_index, frame_index);
+            * motion::twinkle_scale(identity_seed, star_index, frame_index, state);
         let sigma = 0.55 + 0.55 * rng.unit();
         let [screen_x, screen_y] = pose.to_screen(radius * angle.cos(), radius * angle.sin());
         let center_x = CENTER_PIXELS + screen_x;

@@ -23,6 +23,7 @@ pub mod galaxy;
 pub mod history;
 pub mod markings;
 pub mod motion;
+pub mod motion_state;
 pub mod output;
 pub mod render;
 pub mod theme;
