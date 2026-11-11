@@ -96,8 +96,9 @@ after every one succeeds, so a failed run leaves the previous outputs untouched.
 
 ## GitHub Action
 
-The repository ships a composite Action declared in [`action.yml`](action.yml). Point
-the workflow at a release tag, not a moving branch:
+The repository ships a composite Action declared in [`action.yml`](action.yml), which
+downloads the matching release binary and runs it. Point the workflow at a release tag,
+not a moving branch:
 
 ```yaml
 - uses: salmonenjoyer68/Gitlaxy@v0.1.0
@@ -108,12 +109,12 @@ the workflow at a release tag, not a moving branch:
     token: ${{ github.token }}
 ```
 
-The included [`profile.yml`](.github/workflows/profile.yml) workflow runs it nightly at
-00:20 UTC and on manual dispatch, with `login`, `colorway`, `output-dir`, and `token`
-dispatch inputs. It builds the binary, collects the owner's public snapshot, renders
-the five files into the workspace, and commits **only** `galaxy-dark.gif` and
-`galaxy-light.gif`, so a profile README can embed the loops without churning the stills
-and preview.
+The included [`profile.yml`](.github/workflows/profile.yml) workflow does not use that
+Action: it builds the binary from source with `cargo build --release --locked`. It runs
+nightly at 00:20 UTC and on manual dispatch, with `login`, `colorway`, `output-dir`, and
+`token` dispatch inputs. It collects the owner's public snapshot, renders the five files
+into the workspace, and commits **only** `galaxy-dark.gif` and `galaxy-light.gif`, so a
+profile README can embed the loops without churning the stills and preview.
 
 ## License
 

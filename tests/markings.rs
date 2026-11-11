@@ -58,7 +58,6 @@ fn an_ended_streak_lights_no_comet_trail_but_keeps_raising_star_density() {
     let mut development = development_with_streaks(0, 4);
     development.streaks.recent = Some(RecentStreak::Ended {
         weeks: streak_weeks(4),
-        ended_on: "2026-01-05".parse().unwrap(),
     });
     let marks = calculate_streak_marks(&development);
     assert_eq!(marks.trail_length, 0.0);

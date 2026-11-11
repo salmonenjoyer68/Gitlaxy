@@ -102,7 +102,6 @@ fn inactive_weeks_end_the_current_streak_without_erasing_or_restarting_it() {
         ended_development.streaks.recent,
         Some(RecentStreak::Ended {
             weeks: unfinished_week_development.streaks.longest,
-            ended_on: "2025-12-29".parse().unwrap(),
         })
     );
     daily_counts.extend([0; 14]);
@@ -152,16 +151,11 @@ fn a_shorter_ended_streak_remains_available_alongside_the_permanent_record() {
     let galaxy_development =
         derive_galaxy_development(&build_snapshot_with_counts(&daily_counts)).unwrap();
     assert_eq!(galaxy_development.streaks.longest.len(), 2);
-    let Some(RecentStreak::Ended {
-        weeks: ended_weeks,
-        ended_on,
-    }) = galaxy_development.streaks.recent
-    else {
+    let Some(RecentStreak::Ended { weeks: ended_weeks }) = galaxy_development.streaks.recent else {
         panic!("the latest shorter streak must remain available for fading");
     };
     assert_eq!(ended_weeks.len(), 1);
     assert_eq!(ended_weeks[0].active_day_count, 1);
-    assert_eq!(ended_on, "2026-01-19".parse::<NaiveDate>().unwrap());
 }
 
 #[test]
@@ -252,44 +246,24 @@ fn snapshots_without_language_colors_ask_for_a_new_collection() {
 }
 
 #[test]
-fn recent_activity_counts_quiet_days_the_last_week_and_complete_weeks() {
-    let activity_for = |daily_counts: &[u32]| {
+fn recent_activity_counts_the_quiet_run_through_the_observation_date() {
+    let quiet_days_for = |daily_counts: &[u32]| {
         derive_galaxy_development(&build_snapshot_with_counts(daily_counts))
             .unwrap()
             .recent_activity
+            .quiet_day_count
     };
     // Two full weeks, then a quiet Monday and Tuesday.
     assert_eq!(
-        activity_for(&[vec![1; 7], vec![0, 0, 0, 0, 0, 0, 2], vec![0, 0]].concat()),
-        RecentActivity {
-            quiet_day_count: 2,
-            recent_contributions: 2,
-            complete_week_contributions: vec![7, 2],
-            observation_week_contributions: vec![0, 0],
-        }
+        quiet_days_for(&[vec![1; 7], vec![0, 0, 0, 0, 0, 0, 2], vec![0, 0]].concat()),
+        2
     );
     // Active on the observation date, partway through the first week.
-    assert_eq!(
-        activity_for(&[0, 0, 3]),
-        RecentActivity {
-            quiet_day_count: 0,
-            recent_contributions: 3,
-            complete_week_contributions: Vec::new(),
-            observation_week_contributions: vec![0, 0, 3],
-        }
-    );
+    assert_eq!(quiet_days_for(&[0, 0, 3]), 0);
     // Never active: every observed day is quiet.
-    assert_eq!(activity_for(&[0; 5]).quiet_day_count, 5);
+    assert_eq!(quiet_days_for(&[0; 5]), 5);
     // Observed on a Sunday, the full observation week is still in progress.
-    let sunday_activity = activity_for(&[1, 2, 3, 4, 5, 6, 7]);
-    assert_eq!(
-        sunday_activity.complete_week_contributions,
-        Vec::<u64>::new()
-    );
-    assert_eq!(
-        sunday_activity.observation_week_contributions,
-        vec![1, 2, 3, 4, 5, 6, 7]
-    );
+    assert_eq!(quiet_days_for(&[1, 2, 3, 4, 5, 6, 7]), 0);
     let mut empty_snapshot = build_snapshot_with_counts(&[1]);
     empty_snapshot
         .contribution_history
@@ -301,12 +275,7 @@ fn recent_activity_counts_quiet_days_the_last_week_and_complete_weeks() {
         derive_galaxy_development(&empty_snapshot)
             .unwrap()
             .recent_activity,
-        RecentActivity {
-            quiet_day_count: 0,
-            recent_contributions: 0,
-            complete_week_contributions: Vec::new(),
-            observation_week_contributions: Vec::new(),
-        }
+        RecentActivity { quiet_day_count: 0 }
     );
 }
 

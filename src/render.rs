@@ -4,11 +4,11 @@
 //! spiral, a glowing core, and seeded stars. Continuous brightness is quantized with an
 //! ordered dither onto a fixed 128-level ramp built from the chosen
 //! [`Colorway`]'s palette, so a frame never exceeds one GIF palette. The whole shape grows
-//! through five stages driven by total contributions, and the loop adds a whole clockwise
-//! turn and periodic twinkle per 120 frames. A running streak adds a comet trail along
-//! one arm and a break in the longest streak adds seeded stars, both from
-//! [`crate::markings`]; later tickets add pigments and motion states without changing
-//! the canvas or encoder seam.
+//! through five stages driven by total contributions. The loop adds a whole clockwise
+//! turn and a periodic twinkle per 120 frames; a [`MotionState`] dims quiet accounts and
+//! adds two seeded flares to active ones. A running streak adds a comet trail along one
+//! arm, the longest streak raises the star count, and language pigments tint a subset of
+//! stars and arm accents.
 
 use std::f64::consts::{PI, TAU};
 
@@ -147,13 +147,15 @@ pub fn render_galaxy_frame(
     paint_stars(
         &mut brightness,
         &mut tint,
-        &pose,
-        development.identity_seed,
-        frame_index,
-        motion_state,
-        stage_scale,
-        &language_pigments,
-        calculate_star_count(development.streaks.longest.len()),
+        &StarfieldPaint {
+            pose: &pose,
+            identity_seed: development.identity_seed,
+            frame_index,
+            state: motion_state,
+            scale: stage_scale,
+            pigment_shares: &language_pigments,
+            star_count: calculate_star_count(development.streaks.longest.len()),
+        },
     );
     let rgba_pixels = brightness
         .into_iter()
@@ -357,18 +359,32 @@ fn paint_trail(brightness: &mut [f64], pose: &GalaxyPose, scale: f64, streak_mar
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn paint_stars(
-    brightness: &mut [f64],
-    tint: &mut [Option<Pigment>],
-    pose: &GalaxyPose,
+/// The seeded inputs one star field is painted from.
+#[derive(Clone, Copy)]
+struct StarfieldPaint<'a> {
+    pose: &'a GalaxyPose,
     identity_seed: u64,
     frame_index: u32,
     state: MotionState,
     scale: f64,
-    pigment_shares: &[PigmentShare],
+    pigment_shares: &'a [PigmentShare],
     star_count: usize,
+}
+
+fn paint_stars(
+    brightness: &mut [f64],
+    tint: &mut [Option<Pigment>],
+    starfield: &StarfieldPaint<'_>,
 ) {
+    let StarfieldPaint {
+        pose,
+        identity_seed,
+        frame_index,
+        state,
+        scale,
+        pigment_shares,
+        star_count,
+    } = *starfield;
     let star_outer_radius = BASE_OUTER_RADIUS * STAR_OUTER_FRACTION * scale;
     let mut rng = SeededRng::new(pose.texture_seed);
     for star_index in 0..star_count {

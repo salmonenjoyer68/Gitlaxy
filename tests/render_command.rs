@@ -160,6 +160,37 @@ fn the_preview_shows_one_light_and_one_dark_pair_without_scripts() {
 }
 
 #[test]
+fn the_preview_alt_names_the_rendered_colorway_and_the_export_size() {
+    let output_directory = fresh_directory("render-preview-red");
+    let command_output = run_gitlaxy(&[
+        "render",
+        HISTORY_FIXTURE,
+        "--colorway",
+        "red",
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        command_output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&command_output.stderr)
+    );
+    let preview_html = fs::read_to_string(output_directory.join("preview.html")).unwrap();
+    for alt_text in [
+        "The red galaxy on a light background",
+        "The red galaxy still on a light background",
+        "The red galaxy on a dark background",
+        "The red galaxy still on a dark background",
+    ] {
+        assert!(preview_html.contains(alt_text), "{alt_text} missing");
+    }
+    assert!(!preview_html.contains("blue galaxy"));
+    let export_size = format!("width=\"{STATIC_WIDTH_PIXELS}\" height=\"{STATIC_HEIGHT_PIXELS}\"");
+    assert_eq!(preview_html.matches(&export_size).count(), 4);
+}
+
+#[test]
 fn repeated_runs_write_byte_identical_files() {
     let first_directory = fresh_directory("render-repeat-first");
     let second_directory = fresh_directory("render-repeat-second");
@@ -206,6 +237,61 @@ fn a_failed_render_exits_one_and_keeps_the_previous_files() {
         );
     }
     assert_eq!(fs::read_dir(&output_directory).unwrap().count(), 5);
+}
+
+#[test]
+fn a_publication_failure_rolls_back_every_previous_output() {
+    let output_directory = fresh_directory("render-publish-failure");
+    let sentinels: BTreeMap<&str, Vec<u8>> = OUTPUT_FILE_NAMES
+        .map(|file_name| (file_name, format!("previous {file_name}").into_bytes()))
+        .into_iter()
+        .collect();
+    for (file_name, sentinel) in &sentinels {
+        fs::write(output_directory.join(file_name), sentinel).unwrap();
+    }
+    // A directory cannot be replaced by a file, so publication fails after moving some
+    // earlier outputs aside; every one of them must come back untouched.
+    fs::remove_file(output_directory.join("galaxy-dark.gif")).unwrap();
+    fs::create_dir(output_directory.join("galaxy-dark.gif")).unwrap();
+    fs::write(
+        output_directory.join("galaxy-dark.gif/occupied"),
+        "not a file",
+    )
+    .unwrap();
+    let command_output = run_gitlaxy(&[
+        "render",
+        HISTORY_FIXTURE,
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        command_output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&command_output.stderr)
+    );
+    for file_name in OUTPUT_FILE_NAMES {
+        let output_path = output_directory.join(file_name);
+        if file_name == "galaxy-dark.gif" {
+            assert!(output_path.is_dir(), "the blocking directory was replaced");
+            assert_eq!(
+                fs::read_to_string(output_path.join("occupied")).unwrap(),
+                "not a file"
+            );
+        } else {
+            assert_eq!(
+                fs::read(&output_path).unwrap(),
+                sentinels[file_name],
+                "{file_name} changed"
+            );
+        }
+    }
+    let leftovers: Vec<String> = fs::read_dir(&output_directory)
+        .unwrap()
+        .map(|directory_entry| directory_entry.unwrap().file_name().into_string().unwrap())
+        .filter(|file_name| file_name.ends_with(".tmp") || file_name.ends_with(".bak"))
+        .collect();
+    assert!(leftovers.is_empty(), "leftovers: {leftovers:?}");
 }
 
 #[test]

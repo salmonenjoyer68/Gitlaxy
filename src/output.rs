@@ -43,8 +43,8 @@ pub fn encode_png(galaxy_frame: &GalaxyFrame) -> Result<Vec<u8>, png::EncodingEr
     Ok(png_bytes)
 }
 
-/// The preview page up to its caption; the two theme sections follow.
-const PREVIEW_HEAD: &str = r#"<!doctype html>
+/// The preview page, with `{caption}`, `{colorway}`, `{width}`, and `{height}` filled in.
+const PREVIEW_TEMPLATE: &str = r#"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -63,19 +63,18 @@ const PREVIEW_HEAD: &str = r#"<!doctype html>
 </head>
 <body>
 <section class="light">
-<h1>"#;
-const PREVIEW_PANELS: &str = r#"</h1>
+<h1>{caption}</h1>
 <h2>Light</h2>
 <div class="images">
-<figure><img src="galaxy-light.gif" width="512" height="512" alt="The blue galaxy on a light background"><figcaption>galaxy-light.gif</figcaption></figure>
-<figure><img src="galaxy-light.png" width="512" height="512" alt="The blue galaxy still on a light background"><figcaption>galaxy-light.png</figcaption></figure>
+<figure><img src="galaxy-light.gif" width="{width}" height="{height}" alt="The {colorway} galaxy on a light background"><figcaption>galaxy-light.gif</figcaption></figure>
+<figure><img src="galaxy-light.png" width="{width}" height="{height}" alt="The {colorway} galaxy still on a light background"><figcaption>galaxy-light.png</figcaption></figure>
 </div>
 </section>
 <section class="dark">
 <h2>Dark</h2>
 <div class="images">
-<figure><img src="galaxy-dark.gif" width="512" height="512" alt="The blue galaxy on a dark background"><figcaption>galaxy-dark.gif</figcaption></figure>
-<figure><img src="galaxy-dark.png" width="512" height="512" alt="The blue galaxy still on a dark background"><figcaption>galaxy-dark.png</figcaption></figure>
+<figure><img src="galaxy-dark.gif" width="{width}" height="{height}" alt="The {colorway} galaxy on a dark background"><figcaption>galaxy-dark.gif</figcaption></figure>
+<figure><img src="galaxy-dark.png" width="{width}" height="{height}" alt="The {colorway} galaxy still on a dark background"><figcaption>galaxy-dark.png</figcaption></figure>
 </div>
 </section>
 </body>
@@ -84,14 +83,21 @@ const PREVIEW_PANELS: &str = r#"</h1>
 
 /// Build a page that previews `galaxy-light.gif` and `galaxy-light.png` on the light
 /// background and `galaxy-dark.gif` and `galaxy-dark.png` on the dark background, read
-/// from beside it, under the given caption. It draws nothing itself and loads no scripts
-/// or outside files, so it shows exactly what was generated.
-pub fn encode_preview_html(caption: &str) -> String {
-    let escaped_caption = caption
-        .replace('&', "&amp;")
+/// from beside it, under the given caption and colorway name. It draws nothing itself and
+/// loads no scripts or outside files, so it shows exactly what was generated.
+pub fn encode_preview_html(caption: &str, colorway_name: &str) -> String {
+    PREVIEW_TEMPLATE
+        .replace("{colorway}", colorway_name)
+        .replace("{width}", &STATIC_WIDTH_PIXELS.to_string())
+        .replace("{height}", &STATIC_HEIGHT_PIXELS.to_string())
+        // Last, so placeholder-like text in a caption stays literal.
+        .replace("{caption}", &escape_html(caption))
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
         .replace('<', "&lt;")
-        .replace('>', "&gt;");
-    format!("{PREVIEW_HEAD}{escaped_caption}{PREVIEW_PANELS}")
+        .replace('>', "&gt;")
 }
 
 /// One GIF palette holds 256 entries, and one of them marks transparent pixels.

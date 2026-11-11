@@ -1,6 +1,6 @@
 //! Language pigments: which star colors an account's language mix contributes.
 //!
-//! Each language's GitHub color maps to the koi pigment nearest in hue: red, orange,
+//! Each language's GitHub color maps to the galaxy pigment nearest in hue: red, orange,
 //! yellow, or blue. Grays and languages without a color become white or gold so they
 //! stay visible on a galaxy. The language shares weighting each pigment decide, in a
 //! fixed order, which accent color a seeded placement point takes. The renderer keeps
@@ -44,7 +44,7 @@ pub struct PigmentShare {
 /// Colors with too little chroma or saturation are grayscale: lighter grays become
 /// [`Pigment::White`], darker grays become [`Pigment::Gold`]. A language with no
 /// recorded color becomes [`Pigment::White`]. Chromatic colors take the nearest of the
-/// four koi pigments by hue: red below 18 degrees or from 330 degrees, orange through
+/// four hue pigments by hue: red below 18 degrees or from 330 degrees, orange through
 /// 45 degrees, yellow through 160 degrees, and blue for the rest.
 pub fn derive_pigment(language_color: Option<LanguageColor>) -> Pigment {
     const MIN_CHROMA: f64 = 0.12;
