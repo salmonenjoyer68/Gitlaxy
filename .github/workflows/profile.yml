@@ -1,0 +1,74 @@
+name: Nightly galaxy
+
+# Draw the repository owner's galaxy from the previous day's public activity and
+# commit only the two theme loops, so a profile README can embed them. The stills
+# and preview are rendered too, but never committed.
+on:
+  schedule:
+    # Just after midnight UTC, so the galaxy shows the day that just ended.
+    - cron: "20 0 * * *"
+  workflow_dispatch:
+    inputs:
+      login:
+        description: Account whose public activity to draw; defaults to the repository owner.
+        required: false
+        type: string
+      colorway:
+        description: Palette to draw with (blue, red, orange, purple, green, or pink).
+        required: false
+        type: string
+        default: blue
+      output-dir:
+        description: Folder, relative to the workspace, that receives the galaxy.
+        required: false
+        type: string
+        default: galaxy
+      token:
+        description: Token for reading public data; defaults to the built-in token.
+        required: false
+        type: string
+
+# The commit step pushes the refreshed loops back to the repository.
+permissions:
+  contents: write
+
+# One run at a time; a run queued behind another waits instead of cancelling it.
+concurrency:
+  group: nightly-galaxy
+  cancel-in-progress: false
+
+jobs:
+  galaxy:
+    runs-on: ubuntu-latest
+    env:
+      # Dispatch defaults cannot hold expressions, and a scheduled run has no inputs,
+      # so fall back here; an empty dispatch input falls back the same way.
+      GALAXY_LOGIN: ${{ inputs.login || github.repository_owner }}
+      GALAXY_COLORWAY: ${{ inputs['colorway'] || 'blue' }}
+      GALAXY_OUTPUT_DIR: ${{ inputs['output-dir'] || 'galaxy' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Build
+        run: cargo build --release --locked
+      - name: Collect the account snapshot
+        env:
+          GH_TOKEN: ${{ inputs.token || github.token }}
+          GALAXY_SNAPSHOT: ${{ runner.temp }}/galaxy-snapshot.json
+        run: ./target/release/gitlaxy collect "$GALAXY_LOGIN" --output "$GALAXY_SNAPSHOT"
+      - name: Render the galaxy
+        env:
+          GALAXY_SNAPSHOT: ${{ runner.temp }}/galaxy-snapshot.json
+        run: >-
+          ./target/release/gitlaxy render "$GALAXY_SNAPSHOT"
+          --output-dir "$GALAXY_OUTPUT_DIR" --colorway "$GALAXY_COLORWAY"
+      - name: Commit the loops if they changed
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$GALAXY_OUTPUT_DIR/galaxy-dark.gif" "$GALAXY_OUTPUT_DIR/galaxy-light.gif"
+          git diff --cached --quiet && exit 0
+          git commit --quiet --message "galaxy: draw the day's galaxy"
+          git push --quiet
