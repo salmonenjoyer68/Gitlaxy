@@ -117,6 +117,9 @@ pub fn derive_galaxy_development(
 /// Growth stops here; larger totals keep the maximum growth fraction.
 pub const MAX_GROWTH_CONTRIBUTIONS: u64 = 100_000;
 
+/// How many visible growth stages a galaxy has, from a spark to a full disc.
+pub const STAGE_COUNT: u8 = 5;
+
 /// Map total contributions to a growth fraction from zero through one.
 /// Gains diminish until MAX_GROWTH_CONTRIBUTIONS; larger totals stay at one.
 /// The caller supplies the observed total; elapsed time does not affect growth.
@@ -125,6 +128,19 @@ pub fn calculate_growth_fraction(total_contributions: u64) -> f64 {
     let bounded_total = total_contributions.min(MAX_GROWTH_CONTRIBUTIONS);
     (1.0 + bounded_total as f64 / CONTRIBUTION_SCALE).log2()
         / (1.0 + MAX_GROWTH_CONTRIBUTIONS as f64 / CONTRIBUTION_SCALE).log2()
+}
+
+/// Select the visible growth stage from total contributions.
+///
+/// The stages are equal fifths of [`calculate_growth_fraction`]: stage one spans growth
+/// from zero up to (but not including) one fifth, and so on. The boundary totals are
+/// 0-178 (stage 1), 179-995 (stage 2), 996-4733 (stage 3), 4734-21825 (stage 4), and
+/// 21826 and above (stage 5). Totals at or beyond [`MAX_GROWTH_CONTRIBUTIONS`] stay at
+/// the last stage. The caller supplies the observed total; elapsed time does not matter.
+pub fn calculate_stage(total_contributions: u64) -> u8 {
+    let stage =
+        1.0 + (calculate_growth_fraction(total_contributions) * f64::from(STAGE_COUNT)).floor();
+    (stage as u8).clamp(1, STAGE_COUNT)
 }
 
 /// Why a snapshot produced no development. Each message names the repair.
