@@ -7,7 +7,7 @@ use std::process::{Command, Output};
 use gitlaxy::galaxy::derive_galaxy_development;
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::output::{STATIC_HEIGHT_PIXELS, STATIC_WIDTH_PIXELS, encode_gif, encode_png};
-use gitlaxy::render::{LOOP_FRAME_COUNT, render_galaxy_still};
+use gitlaxy::render::{GalaxyFrame, LOOP_FRAME_COUNT, render_galaxy_frame};
 use gitlaxy::theme::Theme;
 
 const HISTORY_FIXTURE: &str = concat!(
@@ -48,14 +48,16 @@ fn render_writes_the_five_galaxy_files_as_the_renderer_draws_them() {
 
     let galaxy_development = read_fixture_development();
     for (theme, file_stem) in [(Theme::Dark, "galaxy-dark"), (Theme::Light, "galaxy-light")] {
-        let still_frame = render_galaxy_still(&galaxy_development, theme);
+        let loop_frames: Vec<GalaxyFrame> = (0..LOOP_FRAME_COUNT)
+            .map(|frame_index| render_galaxy_frame(&galaxy_development, theme, frame_index))
+            .collect();
         assert_eq!(
             fs::read(output_directory.join(format!("{file_stem}.png"))).unwrap(),
-            encode_png(&still_frame).unwrap()
+            encode_png(&loop_frames[0]).unwrap()
         );
         assert_eq!(
             fs::read(output_directory.join(format!("{file_stem}.gif"))).unwrap(),
-            encode_gif(&vec![still_frame; LOOP_FRAME_COUNT as usize]).unwrap()
+            encode_gif(&loop_frames).unwrap()
         );
     }
     let preview_html = fs::read_to_string(output_directory.join("preview.html")).unwrap();
@@ -89,9 +91,9 @@ fn both_themes_are_512_square_on_their_exact_opaque_background() {
         assert!(png_pixels.iter().any(|pixel| *pixel != theme.background()));
 
         let gif_bytes = fs::read(output_directory.join(format!("{file_stem}.gif"))).unwrap();
-        let mut gif_decoder = gif::DecodeOptions::new()
-            .read_info(gif_bytes.as_slice())
-            .unwrap();
+        let mut gif_options = gif::DecodeOptions::new();
+        gif_options.set_color_output(gif::ColorOutput::RGBA);
+        let mut gif_decoder = gif_options.read_info(gif_bytes.as_slice()).unwrap();
         assert_eq!(
             (
                 u32::from(gif_decoder.width()),
@@ -102,6 +104,7 @@ fn both_themes_are_512_square_on_their_exact_opaque_background() {
         assert_eq!(gif_decoder.repeat(), gif::Repeat::Infinite);
         let mut frame_count = 0;
         let mut total_hundredths = 0;
+        let mut first_frame_pixels = Vec::new();
         while let Some(gif_frame) = gif_decoder.read_next_frame().unwrap() {
             frame_count += 1;
             total_hundredths += u32::from(gif_frame.delay);
@@ -109,9 +112,13 @@ fn both_themes_are_512_square_on_their_exact_opaque_background() {
                 (u32::from(gif_frame.width), u32::from(gif_frame.height)),
                 (STATIC_WIDTH_PIXELS, STATIC_HEIGHT_PIXELS)
             );
+            if frame_count == 1 {
+                first_frame_pixels.extend_from_slice(&gif_frame.buffer);
+            }
         }
         assert_eq!(frame_count, LOOP_FRAME_COUNT as usize);
         assert_eq!(total_hundredths, 800);
+        assert_eq!(first_frame_pixels.as_slice(), png_pixels.as_flattened());
     }
 }
 

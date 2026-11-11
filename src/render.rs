@@ -2,20 +2,22 @@
 //!
 //! One pose comes from the account's identity seed: a tilted two-armed logarithmic
 //! spiral, a glowing core, and seeded stars. Continuous brightness is quantized with an
-//! ordered dither onto a fixed blue ramp, so a frame never exceeds one GIF palette.
-//! This ticket renders the fixed middle stage and the blue palette; later tickets add
+//! ordered dither onto a fixed blue ramp, so a frame never exceeds one GIF palette. The
+//! loop adds a whole clockwise turn and periodic twinkle per 120 frames. This ticket
+//! renders the fixed middle stage and the blue palette; later tickets add
 //! contribution-driven stages and colorways without changing the canvas or encoder seam.
 
 use std::f64::consts::{PI, TAU};
 
 use crate::galaxy::GalaxyDevelopment;
+use crate::motion;
 use crate::theme::Theme;
 
 /// Width of the native canvas every galaxy is drawn on.
 pub const FRAME_WIDTH_PIXELS: u32 = 256;
 /// Height of the native canvas; the canvas is square.
 pub const FRAME_HEIGHT_PIXELS: u32 = FRAME_WIDTH_PIXELS;
-/// Frames in one loop; this ticket repeats the still pose.
+/// Frames in one loop: a whole rotation and whole twinkle cycles.
 pub const LOOP_FRAME_COUNT: u32 = 120;
 /// The fixed middle stage this ticket renders; ticket #4 derives stages from totals.
 pub const STILL_STAGE: u8 = 3;
@@ -61,13 +63,32 @@ impl GalaxyFrame {
 ///
 /// The identity seed fixes the spiral rotation, arm phase, texture, and stars; identical
 /// developments and themes produce identical pixels without I/O, clock reads, or input
-/// mutation. The still is the base pose future loop frames animate around.
+/// mutation. The still is loop frame zero, the base pose the loop turns from.
 pub fn render_galaxy_still(development: &GalaxyDevelopment, theme: Theme) -> GalaxyFrame {
+    render_galaxy_frame(development, theme, 0)
+}
+
+/// Render one frame of the seamless eight-second loop.
+///
+/// The base pose comes from the identity seed; the frame index adds a rotation of one
+/// whole turn per loop and a periodic twinkle, both derived without incremental state.
+/// Frame [`LOOP_FRAME_COUNT`] is frame zero, so the loop closes exactly. Identical
+/// developments, themes, and frame indices produce identical pixels.
+pub fn render_galaxy_frame(
+    development: &GalaxyDevelopment,
+    theme: Theme,
+    frame_index: u32,
+) -> GalaxyFrame {
     let palette = build_palette(theme);
-    let pose = GalaxyPose::from_seed(development.identity_seed);
+    let pose = GalaxyPose::at_frame(development.identity_seed, frame_index);
     let mut brightness = vec![0.0; PIXEL_COUNT];
     paint_galaxy(&mut brightness, &pose);
-    paint_stars(&mut brightness, &pose);
+    paint_stars(
+        &mut brightness,
+        &pose,
+        development.identity_seed,
+        frame_index,
+    );
     let rgba_pixels = brightness
         .into_iter()
         .enumerate()
@@ -143,9 +164,9 @@ struct GalaxyPose {
 }
 
 impl GalaxyPose {
-    fn from_seed(seed: u64) -> Self {
+    fn at_frame(seed: u64, frame_index: u32) -> Self {
         let mut rng = SeededRng::new(seed ^ 0x6761_6c61_7879);
-        let rotation = rng.unit() * TAU;
+        let rotation = rng.unit() * TAU + motion::frame_rotation(frame_index);
         let arm_phase = rng.unit() * TAU;
         Self {
             rotation_cos: rotation.cos(),
@@ -212,12 +233,13 @@ fn arm_profile(disc_x: f64, disc_y: f64, radius: f64, arm_phase: f64) -> f64 {
     gate * (-radius / ARM_FALLOFF_RADIUS).exp() * first_arm.max(second_arm)
 }
 
-fn paint_stars(brightness: &mut [f64], pose: &GalaxyPose) {
+fn paint_stars(brightness: &mut [f64], pose: &GalaxyPose, identity_seed: u64, frame_index: u32) {
     let mut rng = SeededRng::new(pose.texture_seed);
-    for _ in 0..STAR_COUNT {
+    for star_index in 0..STAR_COUNT {
         let radius = STAR_OUTER_RADIUS * rng.unit().powf(1.35);
         let angle = rng.unit() * TAU;
-        let peak = 0.25 + 0.75 * rng.unit().powi(2);
+        let peak = (0.25 + 0.75 * rng.unit().powi(2))
+            * motion::twinkle_scale(identity_seed, star_index, frame_index);
         let sigma = 0.55 + 0.55 * rng.unit();
         let [screen_x, screen_y] = pose.to_screen(radius * angle.cos(), radius * angle.sin());
         let center_x = CENTER_PIXELS + screen_x;
@@ -319,7 +341,7 @@ impl SeededRng {
     }
 }
 
-fn splitmix64(mut value: u64) -> u64 {
+pub(crate) fn splitmix64(mut value: u64) -> u64 {
     value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);

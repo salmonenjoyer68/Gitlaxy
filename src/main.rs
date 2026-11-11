@@ -7,10 +7,10 @@ use std::{env, fs};
 
 use chrono::{DateTime, NaiveDate};
 use gitlaxy::collect::{GhCli, collect_account_snapshot};
-use gitlaxy::galaxy::derive_galaxy_development;
+use gitlaxy::galaxy::{GalaxyDevelopment, derive_galaxy_development};
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::output::{encode_gif, encode_png, encode_preview_html};
-use gitlaxy::render::{GalaxyFrame, LOOP_FRAME_COUNT, STILL_STAGE, render_galaxy_still};
+use gitlaxy::render::{GalaxyFrame, LOOP_FRAME_COUNT, STILL_STAGE, render_galaxy_frame};
 use gitlaxy::theme::Theme;
 
 const USAGE: &str = "Usage: gitlaxy collect LOGIN [--output FILE]
@@ -117,16 +117,15 @@ fn render_day(snapshot_path: &Path) -> Result<RenderedDay, String> {
         .map_err(|parse_error| format!("{}: {parse_error}", snapshot_path.display()))?;
     let galaxy_development = derive_galaxy_development(&account_snapshot)
         .map_err(|development_error| development_error.to_string())?;
-    let dark_frame = render_galaxy_still(&galaxy_development, Theme::Dark);
-    let light_frame = render_galaxy_still(&galaxy_development, Theme::Light);
-    let repeat_still = |frame: &GalaxyFrame| vec![frame.clone(); LOOP_FRAME_COUNT as usize];
-    let dark_gif = encode_gif(&repeat_still(&dark_frame))
-        .map_err(|encoding_error| encoding_error.to_string())?;
-    let light_gif = encode_gif(&repeat_still(&light_frame))
-        .map_err(|encoding_error| encoding_error.to_string())?;
-    let dark_png = encode_png(&dark_frame).map_err(|encoding_error| encoding_error.to_string())?;
+    let dark_frames = render_loop(&galaxy_development, Theme::Dark);
+    let light_frames = render_loop(&galaxy_development, Theme::Light);
+    let dark_gif = encode_gif(&dark_frames).map_err(|encoding_error| encoding_error.to_string())?;
+    let light_gif =
+        encode_gif(&light_frames).map_err(|encoding_error| encoding_error.to_string())?;
+    let dark_png =
+        encode_png(&dark_frames[0]).map_err(|encoding_error| encoding_error.to_string())?;
     let light_png =
-        encode_png(&light_frame).map_err(|encoding_error| encoding_error.to_string())?;
+        encode_png(&light_frames[0]).map_err(|encoding_error| encoding_error.to_string())?;
     let caption = format!(
         "Blue galaxy at stage {STILL_STAGE} for {}",
         galaxy_development.observed_on
@@ -142,6 +141,13 @@ fn render_day(snapshot_path: &Path) -> Result<RenderedDay, String> {
             ("preview.html", preview_html.into_bytes()),
         ],
     })
+}
+
+/// Render every frame of one theme's seamless loop, in memory.
+fn render_loop(galaxy_development: &GalaxyDevelopment, theme: Theme) -> Vec<GalaxyFrame> {
+    (0..LOOP_FRAME_COUNT)
+        .map(|frame_index| render_galaxy_frame(galaxy_development, theme, frame_index))
+        .collect()
 }
 
 // GitHub dates its contribution calendar in UTC.
