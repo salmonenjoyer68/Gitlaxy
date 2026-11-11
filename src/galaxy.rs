@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use chrono::{Datelike, Days, IsoWeek, NaiveDate, Weekday};
+use chrono::{Datelike, NaiveDate};
 
 use crate::history::{
     AccountSnapshot, ConflictingRepository, ContributionHistoryError, ContributionSummary,
@@ -26,7 +26,7 @@ pub struct GalaxyDevelopment {
     pub observed_on: NaiveDate,
     /// The longest and the most recent weekly streaks.
     pub streaks: StreakDevelopment,
-    /// Counts around the observation date that behavior selection reads.
+    /// Counts around the observation date that motion selection reads.
     pub recent_activity: RecentActivity,
 }
 
@@ -36,14 +36,6 @@ pub struct RecentActivity {
     /// Days in the run of contribution-free days that ends on the observation date;
     /// an account that has never contributed counts every observed day.
     pub quiet_day_count: u32,
-    /// Contributions in the seven days ending on the observation date.
-    pub recent_contributions: u64,
-    /// Contributions in each complete Monday-Sunday week, oldest first. The
-    /// observation week is still in progress and is left out.
-    pub complete_week_contributions: Vec<u64>,
-    /// Each observed day of the observation week, from Monday through the
-    /// observation date.
-    pub observation_week_contributions: Vec<u64>,
 }
 
 /// Weekly streaks: runs of consecutive Monday-Sunday weeks with at least one active day.
@@ -64,9 +56,6 @@ pub enum RecentStreak {
     Ended {
         /// The streak's weeks, oldest first.
         weeks: Vec<ContributionWeek>,
-        /// The Monday after the first wholly inactive week has completed.
-        /// Further inactivity does not move this date or restart a fade.
-        ended_on: NaiveDate,
     },
 }
 
@@ -184,50 +173,13 @@ impl Error for GalaxyDevelopmentError {
 }
 
 fn measure_recent_activity(contribution_summary: &ContributionSummary) -> RecentActivity {
-    const RECENT_DAY_COUNT: u64 = 7;
-    const DAYS_PER_WEEK: u64 = 7;
-    let observed_on = contribution_summary.observed_on;
-    let daily_counts = &contribution_summary.daily_counts;
-    let quiet_day_count = daily_counts
-        .values()
-        .rev()
-        .take_while(|&&contribution_count| contribution_count == 0)
-        .count() as u32;
-    let recent_start = observed_on
-        .checked_sub_days(Days::new(RECENT_DAY_COUNT - 1))
-        .expect("observation dates are far from the calendar's start");
-    let recent_contributions = daily_counts
-        .range(recent_start..=observed_on)
-        .map(|(_, &contribution_count)| u64::from(contribution_count))
-        .sum();
-    let mut weekly_totals: BTreeMap<IsoWeek, (u64, u64)> = BTreeMap::new();
-    for (contribution_date, &contribution_count) in daily_counts {
-        let (week_contributions, week_day_count) = weekly_totals
-            .entry(contribution_date.iso_week())
-            .or_default();
-        *week_contributions += u64::from(contribution_count);
-        *week_day_count += 1;
-    }
-    let observation_week = observed_on.iso_week();
-    let observation_monday = observed_on
-        .checked_sub_days(Days::new(u64::from(
-            observed_on.weekday().num_days_from_monday(),
-        )))
-        .expect("observation dates are far from the calendar's start");
     RecentActivity {
-        quiet_day_count,
-        recent_contributions,
-        complete_week_contributions: weekly_totals
-            .into_iter()
-            .filter(|&(iso_week, (_, week_day_count))| {
-                week_day_count == DAYS_PER_WEEK && iso_week != observation_week
-            })
-            .map(|(_, (week_contributions, _))| week_contributions)
-            .collect(),
-        observation_week_contributions: daily_counts
-            .range(observation_monday..=observed_on)
-            .map(|(_, &contribution_count)| u64::from(contribution_count))
-            .collect(),
+        quiet_day_count: contribution_summary
+            .daily_counts
+            .values()
+            .rev()
+            .take_while(|&&contribution_count| contribution_count == 0)
+            .count() as u32,
     }
 }
 
@@ -235,42 +187,29 @@ fn calculate_streak_development(contribution_summary: &ContributionSummary) -> S
     let mut longest_week_range = 0..0;
     let mut recent_week_range = 0..0;
     let mut current_start_week_index = None;
-    let mut ended_on = None;
     let observation_week = contribution_summary.observed_on.iso_week();
     for (week_index, contribution_week) in contribution_summary.weeks.iter().enumerate() {
         if contribution_week.active_day_count > 0 {
             let start_week_index = *current_start_week_index.get_or_insert(week_index);
             recent_week_range = start_week_index..week_index + 1;
-            ended_on = None;
             if recent_week_range.len() > longest_week_range.len() {
                 longest_week_range = recent_week_range.clone();
             }
-        } else if contribution_week.iso_week != observation_week
-            && current_start_week_index.take().is_some()
-        {
-            let inactive_sunday = NaiveDate::from_isoywd_opt(
-                contribution_week.iso_week.year(),
-                contribution_week.iso_week.week(),
-                Weekday::Sun,
-            )
-            .expect("a completed observation week has a Sunday");
-            ended_on = Some(
-                inactive_sunday
-                    .succ_opt()
-                    .expect("a completed week precedes the observation date"),
-            );
+        } else if contribution_week.iso_week != observation_week {
+            // A completed inactive week ends the run; the observation week cannot.
+            current_start_week_index = None;
         }
     }
     let recent_streak = if recent_week_range.is_empty() {
         None
     } else {
         let recent_weeks = contribution_summary.weeks[recent_week_range].to_vec();
-        Some(match ended_on {
-            Some(ended_on) => RecentStreak::Ended {
+        Some(if current_start_week_index.is_some() {
+            RecentStreak::Current(recent_weeks)
+        } else {
+            RecentStreak::Ended {
                 weeks: recent_weeks,
-                ended_on,
-            },
-            None => RecentStreak::Current(recent_weeks),
+            }
         })
     };
     StreakDevelopment {

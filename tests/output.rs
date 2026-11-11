@@ -128,7 +128,7 @@ fn partly_transparent_pixels_fail_instead_of_rounding() {
 
 #[test]
 fn the_preview_pairs_each_theme_and_loads_no_scripts_or_external_assets() {
-    let preview_html = encode_preview_html("Blue galaxy <for> two themes & more");
+    let preview_html = encode_preview_html("Blue galaxy <for> two themes & more", "blue");
     assert!(preview_html.contains("Blue galaxy &lt;for&gt; two themes &amp; more"));
     assert!(!preview_html.contains("<script"));
     assert!(!preview_html.contains("http://"));
@@ -146,6 +146,18 @@ fn the_preview_pairs_each_theme_and_loads_no_scripts_or_external_assets() {
     assert!(dark_section.contains("galaxy-dark.png"));
     assert!(!dark_section.contains("galaxy-light."));
     assert_eq!(preview_html.matches("<img ").count(), 4);
+    assert!(preview_html.contains("alt=\"The blue galaxy on a light background\""));
+    assert!(preview_html.contains("alt=\"The blue galaxy still on a dark background\""));
+    let export_size = format!("width=\"{STATIC_WIDTH_PIXELS}\" height=\"{STATIC_HEIGHT_PIXELS}\"");
+    assert_eq!(preview_html.matches(&export_size).count(), 4);
+}
+
+#[test]
+fn the_preview_alt_names_the_colorway_instead_of_the_default() {
+    let preview_html = encode_preview_html("Red galaxy", "red");
+    assert!(preview_html.contains("alt=\"The red galaxy on a light background\""));
+    assert!(preview_html.contains("alt=\"The red galaxy still on a dark background\""));
+    assert!(!preview_html.contains("blue galaxy"));
 }
 
 fn read_development() -> gitlaxy::galaxy::GalaxyDevelopment {

@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, fs};
@@ -127,12 +127,7 @@ fn run_render(arguments: RenderArguments<'_>) -> ExitCode {
     let render_result = render_day(snapshot_path, colorway).and_then(|rendered_day| {
         fs::create_dir_all(output_directory)
             .map_err(|create_error| format!("{}: {create_error}", output_directory.display()))?;
-        let mut written_paths = Vec::new();
-        for (file_name, file_bytes) in rendered_day.output_files {
-            let output_path = output_directory.join(file_name);
-            replace_file(&output_path, &file_bytes)?;
-            written_paths.push(output_path.display().to_string());
-        }
+        let written_paths = publish_output_files(output_directory, &rendered_day.output_files)?;
         println!(
             "{}: wrote {}",
             rendered_day.caption,
@@ -152,7 +147,7 @@ fn run_render(arguments: RenderArguments<'_>) -> ExitCode {
 /// The day's files, by name, with a caption naming the stage and observation date.
 struct RenderedDay {
     caption: String,
-    output_files: [(&'static str, Vec<u8>); 5],
+    output_files: [(String, Vec<u8>); 5],
 }
 
 /// Render and encode both themes in memory, so none is written unless all succeed.
@@ -178,17 +173,22 @@ fn render_day(snapshot_path: &Path, colorway: Colorway) -> Result<RenderedDay, S
         calculate_stage(galaxy_development.total_contributions),
         galaxy_development.observed_on
     );
-    let preview_html = encode_preview_html(&caption);
+    let preview_html = encode_preview_html(&caption, colorway.name());
     Ok(RenderedDay {
         caption,
         output_files: [
-            ("galaxy-dark.png", dark_png),
-            ("galaxy-light.png", light_png),
-            ("galaxy-dark.gif", dark_gif),
-            ("galaxy-light.gif", light_gif),
-            ("preview.html", preview_html.into_bytes()),
+            (galaxy_file_name(Theme::Dark, "png"), dark_png),
+            (galaxy_file_name(Theme::Light, "png"), light_png),
+            (galaxy_file_name(Theme::Dark, "gif"), dark_gif),
+            (galaxy_file_name(Theme::Light, "gif"), light_gif),
+            ("preview.html".to_owned(), preview_html.into_bytes()),
         ],
     })
+}
+
+/// The output file name for one theme and format.
+fn galaxy_file_name(theme: Theme, extension: &str) -> String {
+    format!("galaxy-{}.{extension}", theme.name())
 }
 
 /// Render every frame of one theme's seamless loop, in memory.
@@ -238,4 +238,73 @@ fn replace_file(output_path: &Path, file_bytes: &[u8]) -> Result<(), String> {
             let _ = fs::remove_file(&temporary_path);
             format!("{}: {write_error}", output_path.display())
         })
+}
+
+/// Publish every file as one unit: stage a temporary for each, move the old files aside,
+/// rename the temporaries into place, and on any failure restore the old files and remove
+/// the rest. On success the backups are deleted.
+fn publish_output_files(
+    output_directory: &Path,
+    output_files: &[(String, Vec<u8>)],
+) -> Result<Vec<String>, String> {
+    let staged_paths: Vec<PathBuf> = output_files
+        .iter()
+        .map(|(file_name, _)| output_directory.join(format!("{file_name}.tmp")))
+        .collect();
+    let roll_back = |moved_aside: &[(PathBuf, PathBuf)], published: &[PathBuf]| {
+        for output_path in published {
+            let _ = fs::remove_file(output_path);
+        }
+        for (output_path, backup_path) in moved_aside.iter().rev() {
+            let _ = fs::rename(backup_path, output_path);
+        }
+        for staged_path in &staged_paths {
+            let _ = fs::remove_file(staged_path);
+        }
+    };
+
+    let mut moved_aside: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut published: Vec<PathBuf> = Vec::new();
+    for ((file_name, file_bytes), staged_path) in output_files.iter().zip(&staged_paths) {
+        if let Err(write_error) = fs::write(staged_path, file_bytes) {
+            roll_back(&moved_aside, &published);
+            return Err(format!("{}: {write_error}", staged_path.display()));
+        }
+        let output_path = output_directory.join(file_name);
+        match fs::symlink_metadata(&output_path) {
+            Ok(metadata) if metadata.file_type().is_file() => {
+                let backup_path = output_directory.join(format!("{file_name}.bak"));
+                if let Err(rename_error) = fs::rename(&output_path, &backup_path) {
+                    roll_back(&moved_aside, &published);
+                    return Err(format!("{}: {rename_error}", output_path.display()));
+                }
+                moved_aside.push((output_path.clone(), backup_path));
+            }
+            Ok(_) => {
+                roll_back(&moved_aside, &published);
+                return Err(format!(
+                    "{}: cannot replace a path that is not a regular file",
+                    output_path.display()
+                ));
+            }
+            Err(metadata_error) if metadata_error.kind() == io::ErrorKind::NotFound => {}
+            Err(metadata_error) => {
+                roll_back(&moved_aside, &published);
+                return Err(format!("{}: {metadata_error}", output_path.display()));
+            }
+        }
+        if let Err(rename_error) = fs::rename(staged_path, &output_path) {
+            roll_back(&moved_aside, &published);
+            return Err(format!("{}: {rename_error}", output_path.display()));
+        }
+        published.push(output_path);
+    }
+    for (_, backup_path) in &moved_aside {
+        fs::remove_file(backup_path)
+            .map_err(|remove_error| format!("{}: {remove_error}", backup_path.display()))?;
+    }
+    Ok(published
+        .iter()
+        .map(|output_path| output_path.display().to_string())
+        .collect())
 }
