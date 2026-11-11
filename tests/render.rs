@@ -3,8 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{Datelike, Days, NaiveDate};
 use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::{
-    GalaxyDevelopment, MAX_GROWTH_CONTRIBUTIONS, RecentStreak, StreakDevelopment, calculate_stage,
-    derive_galaxy_development,
+    GalaxyDevelopment, RecentStreak, StreakDevelopment, calculate_stage, derive_galaxy_development,
 };
 use gitlaxy::history::{AccountSnapshot, ContributionWeek};
 use gitlaxy::markings::{STAR_DENSITY_FULL_WEEKS, TRAIL_FULL_WEEKS};
@@ -78,7 +77,7 @@ fn the_same_development_and_theme_render_identical_pixels() {
     let mut other_snapshot = read_snapshot();
     other_snapshot.account_id += 1;
     let mut other_development = derive_galaxy_development(&other_snapshot).unwrap();
-    other_development.total_contributions = MAX_GROWTH_CONTRIBUTIONS;
+    other_development.total_contributions = 1_500;
     assert_ne!(
         render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Dark),
         render_galaxy_still(&other_development, Colorway::Blue, Theme::Dark)
@@ -125,7 +124,7 @@ fn the_first_stage_is_a_single_spark() {
 
 #[test]
 fn the_last_stage_fills_about_eighty_five_percent_of_the_canvas() {
-    let galaxy_development = development_with_total(MAX_GROWTH_CONTRIBUTIONS);
+    let galaxy_development = development_with_total(1_500);
     assert_eq!(calculate_stage(galaxy_development.total_contributions), 5);
     let galaxy_frame = render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Dark);
     let (left, _, right, _) = opaque_bounds(&galaxy_frame, Theme::Dark.background());
@@ -139,7 +138,7 @@ fn the_last_stage_fills_about_eighty_five_percent_of_the_canvas() {
 
 #[test]
 fn increasing_totals_grow_the_galaxy_through_every_stage() {
-    let totals = [0, 179, 996, 4_734, MAX_GROWTH_CONTRIBUTIONS];
+    let totals = [0, 250, 750, 1_250, 1_500];
     let mut previous_extent = 0;
     for (stage_index, total) in totals.into_iter().enumerate() {
         let galaxy_development = development_with_total(total);
@@ -159,7 +158,7 @@ fn increasing_totals_grow_the_galaxy_through_every_stage() {
 #[test]
 fn still_and_loop_frames_render_the_development_stage() {
     let spark_development = development_with_total(0);
-    let full_development = development_with_total(MAX_GROWTH_CONTRIBUTIONS);
+    let full_development = development_with_total(1_500);
     for frame_index in [0, 1, 60, 119] {
         let spark_frame =
             render_galaxy_frame(&spark_development, Colorway::Blue, Theme::Dark, frame_index);
@@ -289,7 +288,7 @@ fn read_snapshot() -> AccountSnapshot {
 
 /// The fixture's own 14 contributions are stage one; appearance tests want a full galaxy.
 fn read_development() -> GalaxyDevelopment {
-    development_with_total(MAX_GROWTH_CONTRIBUTIONS)
+    development_with_total(1_500)
 }
 
 fn development_with_total(total_contributions: u64) -> GalaxyDevelopment {
@@ -352,7 +351,7 @@ fn differing_pixels(left: &GalaxyFrame, right: &GalaxyFrame) -> usize {
 }
 
 fn development_with_streaks(current_weeks: usize, longest_weeks: usize) -> GalaxyDevelopment {
-    let mut galaxy_development = development_with_total(MAX_GROWTH_CONTRIBUTIONS);
+    let mut galaxy_development = development_with_total(1_500);
     galaxy_development.streaks = StreakDevelopment {
         longest: streak_weeks(longest_weeks),
         recent: (current_weeks > 0).then(|| RecentStreak::Current(streak_weeks(current_weeks))),

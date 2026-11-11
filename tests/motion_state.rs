@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
 use gitlaxy::colorway::Colorway;
-use gitlaxy::galaxy::{GalaxyDevelopment, MAX_GROWTH_CONTRIBUTIONS, derive_galaxy_development};
+use gitlaxy::galaxy::{GalaxyDevelopment, derive_galaxy_development};
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::motion::{flare_frames, flare_intensity, twinkle_scale};
 use gitlaxy::motion_state::{MotionState, select_motion_state};
@@ -201,7 +201,7 @@ fn read_development(quiet_day_count: u32) -> GalaxyDevelopment {
     let account_snapshot: AccountSnapshot = serde_json::from_str(HISTORY_FIXTURE).unwrap();
     let mut development = derive_galaxy_development(&account_snapshot).unwrap();
     // The fixture's own total is stage one; appearance tests want a full galaxy.
-    development.total_contributions = MAX_GROWTH_CONTRIBUTIONS;
+    development.total_contributions = 1_500;
     development.recent_activity.quiet_day_count = quiet_day_count;
     development
 }

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use gitlaxy::colorway::Colorway;
-use gitlaxy::galaxy::{GalaxyDevelopment, MAX_GROWTH_CONTRIBUTIONS, derive_galaxy_development};
+use gitlaxy::galaxy::{GalaxyDevelopment, derive_galaxy_development};
 use gitlaxy::history::{AccountSnapshot, LanguageColor};
 use gitlaxy::pigment::{
     Pigment, calculate_pigment_shares, derive_pigment, pigment_color, select_pigment,
@@ -19,7 +19,7 @@ const PIXEL_COUNT: usize = (FRAME_WIDTH_PIXELS * FRAME_HEIGHT_PIXELS) as usize;
 fn read_development() -> GalaxyDevelopment {
     let account_snapshot: AccountSnapshot = serde_json::from_str(HISTORY_FIXTURE).unwrap();
     let mut galaxy_development = derive_galaxy_development(&account_snapshot).unwrap();
-    galaxy_development.total_contributions = MAX_GROWTH_CONTRIBUTIONS;
+    galaxy_development.total_contributions = 1_500;
     galaxy_development.language_shares = BTreeMap::from([
         ("Rust".to_string(), 0.2),
         ("Python".to_string(), 0.2),

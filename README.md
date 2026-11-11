@@ -39,10 +39,11 @@ The sheet is the catalog: the blue, red, orange, purple, green, and pink galaxy,
 from a single spark to a full spiral. `docs/galax-black.png` is drawn for dark pages and
 `docs/galax-white.png` for light ones.
 
-A galaxy grows with the account's contribution total (stage 1 at 0–178 contributions,
-stage 5 from 21,826 on). A quiet streak of 14 or more days dims it to *quiet* motion;
-otherwise it is *active*, with denser twinkle and two seeded flares per loop. The
-colorway is purely cosmetic; stages and motion come from the data.
+A galaxy grows with the account's contribution total: stage 1 from 0, stage 2 from 250,
+stage 3 from 750, stage 4 from 1,250, and stage 5 from 1,500 contributions. A quiet
+streak of 14 or more days dims it to *quiet* motion; otherwise it is *active*, with
+denser twinkle and two seeded flares per loop. The colorway is purely cosmetic; stages
+and motion come from the data.
 
 ## Requirements
 

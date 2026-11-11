@@ -3,7 +3,7 @@ use std::f64::consts::{PI, TAU};
 use std::sync::LazyLock;
 
 use gitlaxy::colorway::Colorway;
-use gitlaxy::galaxy::{GalaxyDevelopment, MAX_GROWTH_CONTRIBUTIONS, derive_galaxy_development};
+use gitlaxy::galaxy::{GalaxyDevelopment, derive_galaxy_development};
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::motion::{frame_rotation, twinkle_scale};
 use gitlaxy::motion_state::MotionState;
@@ -187,7 +187,7 @@ fn read_development() -> GalaxyDevelopment {
     let account_snapshot: AccountSnapshot = serde_json::from_str(HISTORY_FIXTURE).unwrap();
     let mut galaxy_development = derive_galaxy_development(&account_snapshot).unwrap();
     // The fixture's own total is stage one; the loop tests need a full spiral.
-    galaxy_development.total_contributions = MAX_GROWTH_CONTRIBUTIONS;
+    galaxy_development.total_contributions = 1_500;
     // Loop tests measure the active loop; the quiet state is covered separately.
     galaxy_development.recent_activity.quiet_day_count = 0;
     galaxy_development

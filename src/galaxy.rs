@@ -103,33 +103,22 @@ pub fn derive_galaxy_development(
     })
 }
 
-/// Growth stops here; larger totals keep the maximum growth fraction.
-pub const MAX_GROWTH_CONTRIBUTIONS: u64 = 100_000;
-
 /// How many visible growth stages a galaxy has, from a spark to a full disc.
 pub const STAGE_COUNT: u8 = 5;
 
-/// Map total contributions to a growth fraction from zero through one.
-/// Gains diminish until MAX_GROWTH_CONTRIBUTIONS; larger totals stay at one.
-/// The caller supplies the observed total; elapsed time does not affect growth.
-pub fn calculate_growth_fraction(total_contributions: u64) -> f64 {
-    const CONTRIBUTION_SCALE: f64 = 50.0;
-    let bounded_total = total_contributions.min(MAX_GROWTH_CONTRIBUTIONS);
-    (1.0 + bounded_total as f64 / CONTRIBUTION_SCALE).log2()
-        / (1.0 + MAX_GROWTH_CONTRIBUTIONS as f64 / CONTRIBUTION_SCALE).log2()
-}
+/// The first total that reaches each stage, from stage one to stage five.
+pub const STAGE_MINIMUM_CONTRIBUTIONS: [u64; STAGE_COUNT as usize] = [0, 250, 750, 1_250, 1_500];
 
 /// Select the visible growth stage from total contributions.
 ///
-/// The stages are equal fifths of [`calculate_growth_fraction`]: stage one spans growth
-/// from zero up to (but not including) one fifth, and so on. The boundary totals are
-/// 0-178 (stage 1), 179-995 (stage 2), 996-4733 (stage 3), 4734-21825 (stage 4), and
-/// 21826 and above (stage 5). Totals at or beyond [`MAX_GROWTH_CONTRIBUTIONS`] stay at
-/// the last stage. The caller supplies the observed total; elapsed time does not matter.
+/// Stage one starts at 0, stage two at 250, stage three at 750, stage four at 1,250,
+/// and stage five at 1,500; later totals stay at stage five. The caller supplies the
+/// observed total; elapsed time does not matter.
 pub fn calculate_stage(total_contributions: u64) -> u8 {
-    let stage =
-        1.0 + (calculate_growth_fraction(total_contributions) * f64::from(STAGE_COUNT)).floor();
-    (stage as u8).clamp(1, STAGE_COUNT)
+    STAGE_MINIMUM_CONTRIBUTIONS
+        .iter()
+        .rposition(|&minimum| total_contributions >= minimum)
+        .map_or(1, |stage_index| stage_index as u8 + 1)
 }
 
 /// Why a snapshot produced no development. Each message names the repair.

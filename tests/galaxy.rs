@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use chrono::{Days, NaiveDate};
 use gitlaxy::galaxy::{
-    GalaxyDevelopmentError, MAX_GROWTH_CONTRIBUTIONS, RecentActivity, RecentStreak,
-    calculate_growth_fraction, calculate_stage, derive_galaxy_development,
+    GalaxyDevelopmentError, RecentActivity, RecentStreak, STAGE_MINIMUM_CONTRIBUTIONS,
+    calculate_stage, derive_galaxy_development,
 };
 use gitlaxy::history::{
     AccountSnapshot, ConflictingRepository, ContributionDay, ContributionHistory,
@@ -280,41 +280,26 @@ fn recent_activity_counts_the_quiet_run_through_the_observation_date() {
 }
 
 #[test]
-fn growth_rises_with_contributions_and_stops_at_the_cap() {
-    let no_contributions = calculate_growth_fraction(0);
-    let few_contributions = calculate_growth_fraction(500);
-    let many_contributions = calculate_growth_fraction(12_750);
-    assert_eq!(no_contributions, 0.0);
-    assert!(no_contributions < few_contributions);
-    assert!(few_contributions < many_contributions);
-    assert!(many_contributions <= 1.0);
-    assert_eq!(
-        calculate_growth_fraction(MAX_GROWTH_CONTRIBUTIONS),
-        calculate_growth_fraction(u64::MAX)
-    );
-    assert_eq!(calculate_growth_fraction(u64::MAX), 1.0);
-}
-
-#[test]
-fn stages_split_the_growth_fraction_into_equal_fifths() {
-    // Each threshold is the first total whose growth fraction reaches the next fifth.
-    for (stage, boundary_total) in [(2u8, 179u64), (3, 996), (4, 4_734), (5, 21_826)] {
-        let fifth = f64::from(stage - 1) / 5.0;
-        assert_eq!(calculate_stage(boundary_total - 1), stage - 1);
-        assert_eq!(calculate_stage(boundary_total), stage);
-        assert!(calculate_growth_fraction(boundary_total - 1) < fifth);
-        assert!(calculate_growth_fraction(boundary_total) >= fifth);
+fn stages_start_at_their_contribution_minimums() {
+    for (stage_index, &minimum) in STAGE_MINIMUM_CONTRIBUTIONS.iter().enumerate() {
+        assert_eq!(calculate_stage(minimum), stage_index as u8 + 1);
+        if minimum > 0 {
+            assert_eq!(calculate_stage(minimum - 1), stage_index as u8);
+        }
     }
 }
 
 #[test]
 fn stage_boundaries_cover_zero_max_and_beyond() {
     assert_eq!(calculate_stage(0), 1);
-    assert_eq!(calculate_stage(178), 1);
-    assert_eq!(calculate_stage(995), 2);
-    assert_eq!(calculate_stage(4_733), 3);
-    assert_eq!(calculate_stage(21_825), 4);
-    assert_eq!(calculate_stage(MAX_GROWTH_CONTRIBUTIONS), 5);
+    assert_eq!(calculate_stage(249), 1);
+    assert_eq!(calculate_stage(250), 2);
+    assert_eq!(calculate_stage(749), 2);
+    assert_eq!(calculate_stage(750), 3);
+    assert_eq!(calculate_stage(1_249), 3);
+    assert_eq!(calculate_stage(1_250), 4);
+    assert_eq!(calculate_stage(1_499), 4);
+    assert_eq!(calculate_stage(1_500), 5);
     assert_eq!(calculate_stage(u64::MAX), 5);
 }
 
