@@ -7,8 +7,9 @@
 //!    participation from them.
 //! 3. [`galaxy`] turns a snapshot into a [`galaxy::GalaxyDevelopment`]: identity,
 //!    language colors, growth, streaks, and recent activity.
-//! 4. [`render`] draws a [`render::GalaxyFrame`] on a [`theme::Theme`] background, and
-//!    [`output`] encodes it as PNG or a looping GIF, with a preview page.
+//! 4. [`render`] draws a [`render::GalaxyFrame`] in a [`colorway::Colorway`] on a
+//!    [`theme::Theme`] background, and [`output`] encodes it as PNG or a looping GIF,
+//!    with a preview page.
 //!
 //! Everything after collection is deterministic: it reads no clock, performs no I/O, and
 //! mutates no input. Callers own files and publication. The `gitlaxy` command composes
@@ -17,6 +18,7 @@
 #![warn(missing_docs)]
 
 pub mod collect;
+pub mod colorway;
 pub mod galaxy;
 pub mod history;
 pub mod motion;

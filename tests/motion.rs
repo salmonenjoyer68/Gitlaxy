@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::f64::consts::{PI, TAU};
 use std::sync::LazyLock;
 
+use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::{GalaxyDevelopment, derive_galaxy_development};
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::motion::{frame_rotation, twinkle_scale};
@@ -20,8 +21,8 @@ fn the_still_is_exactly_the_first_loop_frame() {
     let galaxy_development = read_development();
     for theme in [Theme::Dark, Theme::Light] {
         assert_eq!(
-            render_galaxy_still(&galaxy_development, theme),
-            render_galaxy_frame(&galaxy_development, theme, 0)
+            render_galaxy_still(&galaxy_development, Colorway::Blue, theme),
+            render_galaxy_frame(&galaxy_development, Colorway::Blue, theme, 0)
         );
     }
 }
@@ -32,8 +33,13 @@ fn the_still_is_exactly_the_first_loop_frame() {
 fn the_analytic_next_frame_wraps_to_the_first() {
     let galaxy_development = read_development();
     assert_eq!(
-        render_galaxy_frame(&galaxy_development, Theme::Dark, LOOP_FRAME_COUNT),
-        render_galaxy_frame(&galaxy_development, Theme::Dark, 0)
+        render_galaxy_frame(
+            &galaxy_development,
+            Colorway::Blue,
+            Theme::Dark,
+            LOOP_FRAME_COUNT
+        ),
+        render_galaxy_frame(&galaxy_development, Colorway::Blue, Theme::Dark, 0)
     );
     assert_eq!(
         frame_rotation(LOOP_FRAME_COUNT).to_bits(),
@@ -52,7 +58,7 @@ fn every_loop_frame_stays_under_the_gif_palette_ceiling() {
     for theme in [Theme::Dark, Theme::Light] {
         for frame_index in 0..LOOP_FRAME_COUNT {
             let colors: BTreeSet<[u8; 4]> =
-                render_galaxy_frame(&galaxy_development, theme, frame_index)
+                render_galaxy_frame(&galaxy_development, Colorway::Blue, theme, frame_index)
                     .as_rgba_bytes()
                     .as_chunks::<4>()
                     .0
@@ -159,7 +165,14 @@ fn twinkle_varies_and_returns_without_moving_stars() {
 static DARK_FRAMES: LazyLock<Vec<GalaxyFrame>> = LazyLock::new(|| {
     let galaxy_development = read_development();
     (0..LOOP_FRAME_COUNT)
-        .map(|frame_index| render_galaxy_frame(&galaxy_development, Theme::Dark, frame_index))
+        .map(|frame_index| {
+            render_galaxy_frame(
+                &galaxy_development,
+                Colorway::Blue,
+                Theme::Dark,
+                frame_index,
+            )
+        })
         .collect()
 });
 

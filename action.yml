@@ -1,7 +1,7 @@
 name: gitlaxy
 description:
-  Draw a GitHub account's blue galaxy from its public activity as looping GIFs, still
-  PNGs, and a preview, for a profile README.
+  Draw a GitHub account's galaxy from its public activity as looping GIFs, still PNGs,
+  and a preview, for a profile README.
 branding:
   icon: star
   color: blue
@@ -15,6 +15,9 @@ inputs:
       Folder, relative to the workspace, that receives galaxy-dark.png,
       galaxy-light.png, galaxy-dark.gif, galaxy-light.gif, and preview.html.
     default: galaxy
+  colorway:
+    description: "Galaxy colorway: blue, red, orange, purple, green, or pink."
+    default: blue
   token:
     description:
       Token for reading the account's public data; the built-in token is enough.
@@ -67,6 +70,7 @@ runs:
       shell: bash
       env:
         GALAXY_OUTPUT_DIR: ${{ inputs.output-dir }}
+        GALAXY_COLORWAY: ${{ inputs.colorway }}
       run:
         gitlaxy render "$RUNNER_TEMP/galaxy-snapshot.json" --output-dir
-        "$GALAXY_OUTPUT_DIR"
+        "$GALAXY_OUTPUT_DIR" --colorway "$GALAXY_COLORWAY"

@@ -7,6 +7,7 @@ use std::{env, fs};
 
 use chrono::{DateTime, NaiveDate};
 use gitlaxy::collect::{GhCli, collect_account_snapshot};
+use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::{GalaxyDevelopment, derive_galaxy_development};
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::output::{encode_gif, encode_png, encode_preview_html};
@@ -14,7 +15,7 @@ use gitlaxy::render::{GalaxyFrame, LOOP_FRAME_COUNT, STILL_STAGE, render_galaxy_
 use gitlaxy::theme::Theme;
 
 const USAGE: &str = "Usage: gitlaxy collect LOGIN [--output FILE]
-       gitlaxy render SNAPSHOT --output-dir DIR
+       gitlaxy render SNAPSHOT --output-dir DIR [--colorway COLORWAY]
        gitlaxy --help | --version
 Collect LOGIN's public GitHub snapshot as JSON through `gh api`: public owned and
 contributed repositories, and daily contributions from the account's creation
@@ -22,12 +23,13 @@ through yesterday (UTC), the last complete day.
 Writes to standard output, or replaces FILE only after collection succeeds.
 Requires an authenticated GitHub CLI; in GitHub Actions, set GH_TOKEN to github.token.
 Render a collected SNAPSHOT into DIR: galaxy-dark.png, galaxy-light.png,
-galaxy-dark.gif, and galaxy-light.gif show the blue galaxy at stage 3 on the dark and
-light page backgrounds, and preview.html shows all four. The files are replaced only
-after all of them render.
+galaxy-dark.gif, and galaxy-light.gif show the galaxy at stage 3 in the chosen
+colorway on the dark and light page backgrounds, and preview.html shows all four.
+The files are replaced only after all of them render.
+COLORWAY is blue (the default), red, orange, purple, green, or pink.
 Errors go to stderr and exit 1; invalid usage exits 2.
 Examples: gitlaxy collect octocat --output snapshot.json
-          gitlaxy render snapshot.json --output-dir galaxy";
+          gitlaxy render snapshot.json --output-dir galaxy --colorway purple";
 
 fn main() -> ExitCode {
     let program_arguments: Vec<OsString> = env::args_os().skip(1).collect();
@@ -48,11 +50,13 @@ fn main() -> ExitCode {
         [Some("collect"), Some(login), Some("--output"), _] if !login.starts_with('-') => {
             run_collect(login, Some(Path::new(&program_arguments[3])))
         }
-        [Some("render"), Some(snapshot_path), Some("--output-dir"), _]
-            if !snapshot_path.starts_with('-') =>
-        {
-            run_render(Path::new(snapshot_path), Path::new(&program_arguments[3]))
-        }
+        [Some("render"), _, ..] => match parse_render_arguments(&program_arguments[1..]) {
+            Some(render_arguments) => run_render(render_arguments),
+            None => {
+                eprintln!("{USAGE}");
+                ExitCode::from(2)
+            }
+        },
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -77,8 +81,50 @@ fn run_collect(login: &str, output_path: Option<&Path>) -> ExitCode {
     }
 }
 
-fn run_render(snapshot_path: &Path, output_directory: &Path) -> ExitCode {
-    let render_result = render_day(snapshot_path).and_then(|rendered_day| {
+/// The parsed shape of `gitlaxy render SNAPSHOT --output-dir DIR [--colorway COLORWAY]`.
+struct RenderArguments<'a> {
+    snapshot_path: &'a Path,
+    output_directory: &'a Path,
+    colorway: Colorway,
+}
+
+/// Parse render flags in either order, rejecting unknown, missing, or duplicate ones.
+fn parse_render_arguments(program_arguments: &[OsString]) -> Option<RenderArguments<'_>> {
+    let (snapshot_argument, flag_arguments) = program_arguments.split_first()?;
+    if snapshot_argument.to_str()?.starts_with('-') {
+        return None;
+    }
+    let mut output_directory = None;
+    let mut colorway = None;
+    let mut flag_index = 0;
+    while flag_index < flag_arguments.len() {
+        let flag = flag_arguments[flag_index].to_str()?;
+        let value = flag_arguments.get(flag_index + 1)?;
+        match flag {
+            "--output-dir" if output_directory.is_none() => {
+                output_directory = Some(Path::new(value));
+            }
+            "--colorway" if colorway.is_none() => {
+                colorway = Some(Colorway::parse(value.to_str()?)?);
+            }
+            _ => return None,
+        }
+        flag_index += 2;
+    }
+    Some(RenderArguments {
+        snapshot_path: Path::new(snapshot_argument),
+        output_directory: output_directory?,
+        colorway: colorway.unwrap_or_default(),
+    })
+}
+
+fn run_render(arguments: RenderArguments<'_>) -> ExitCode {
+    let RenderArguments {
+        snapshot_path,
+        output_directory,
+        colorway,
+    } = arguments;
+    let render_result = render_day(snapshot_path, colorway).and_then(|rendered_day| {
         fs::create_dir_all(output_directory)
             .map_err(|create_error| format!("{}: {create_error}", output_directory.display()))?;
         let mut written_paths = Vec::new();
@@ -110,15 +156,15 @@ struct RenderedDay {
 }
 
 /// Render and encode both themes in memory, so none is written unless all succeed.
-fn render_day(snapshot_path: &Path) -> Result<RenderedDay, String> {
+fn render_day(snapshot_path: &Path, colorway: Colorway) -> Result<RenderedDay, String> {
     let snapshot_json = fs::read_to_string(snapshot_path)
         .map_err(|read_error| format!("{}: {read_error}", snapshot_path.display()))?;
     let account_snapshot: AccountSnapshot = serde_json::from_str(&snapshot_json)
         .map_err(|parse_error| format!("{}: {parse_error}", snapshot_path.display()))?;
     let galaxy_development = derive_galaxy_development(&account_snapshot)
         .map_err(|development_error| development_error.to_string())?;
-    let dark_frames = render_loop(&galaxy_development, Theme::Dark);
-    let light_frames = render_loop(&galaxy_development, Theme::Light);
+    let dark_frames = render_loop(&galaxy_development, colorway, Theme::Dark);
+    let light_frames = render_loop(&galaxy_development, colorway, Theme::Light);
     let dark_gif = encode_gif(&dark_frames).map_err(|encoding_error| encoding_error.to_string())?;
     let light_gif =
         encode_gif(&light_frames).map_err(|encoding_error| encoding_error.to_string())?;
@@ -127,7 +173,8 @@ fn render_day(snapshot_path: &Path) -> Result<RenderedDay, String> {
     let light_png =
         encode_png(&light_frames[0]).map_err(|encoding_error| encoding_error.to_string())?;
     let caption = format!(
-        "Blue galaxy at stage {STILL_STAGE} for {}",
+        "{} galaxy at stage {STILL_STAGE} for {}",
+        colorway.name(),
         galaxy_development.observed_on
     );
     let preview_html = encode_preview_html(&caption);
@@ -144,9 +191,13 @@ fn render_day(snapshot_path: &Path) -> Result<RenderedDay, String> {
 }
 
 /// Render every frame of one theme's seamless loop, in memory.
-fn render_loop(galaxy_development: &GalaxyDevelopment, theme: Theme) -> Vec<GalaxyFrame> {
+fn render_loop(
+    galaxy_development: &GalaxyDevelopment,
+    colorway: Colorway,
+    theme: Theme,
+) -> Vec<GalaxyFrame> {
     (0..LOOP_FRAME_COUNT)
-        .map(|frame_index| render_galaxy_frame(galaxy_development, theme, frame_index))
+        .map(|frame_index| render_galaxy_frame(galaxy_development, colorway, theme, frame_index))
         .collect()
 }
 

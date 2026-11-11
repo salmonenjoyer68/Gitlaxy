@@ -5,6 +5,7 @@ use std::process::Command;
 
 use chrono::{Datelike, Days, NaiveDate, Weekday};
 use gitlaxy::collect::{CollectionError, GraphqlClient, collect_account_snapshot};
+use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::derive_galaxy_development;
 use gitlaxy::history::{
     ContributionHistoryError, LanguageColor, calculate_language_shares, summarize_contributions,
@@ -46,6 +47,7 @@ fn collected_snapshot_covers_every_page_and_day_and_renders() {
 
     let galaxy_frame = render_galaxy_still(
         &derive_galaxy_development(&account_snapshot).unwrap(),
+        Colorway::Blue,
         Theme::Dark,
     );
     assert!(
