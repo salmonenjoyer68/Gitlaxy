@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::sync::LazyLock;
 
+use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::derive_galaxy_development;
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::output::{
@@ -63,7 +64,7 @@ fn the_gif_rebuilds_every_frame_exactly_at_twice_the_size() {
 
 #[test]
 fn the_png_repeats_each_native_pixel_exactly_at_twice_the_size() {
-    let galaxy_frame = render_galaxy_still(&read_development(), Theme::Dark);
+    let galaxy_frame = render_galaxy_still(&read_development(), Colorway::Blue, Theme::Dark);
     let png_bytes = encode_png(&galaxy_frame).unwrap();
     let mut png_reader = png::Decoder::new(Cursor::new(png_bytes))
         .read_info()
@@ -156,14 +157,14 @@ fn read_development() -> gitlaxy::galaxy::GalaxyDevelopment {
 fn two_theme_frames() -> Vec<GalaxyFrame> {
     let galaxy_development = read_development();
     vec![
-        render_galaxy_still(&galaxy_development, Theme::Dark),
-        render_galaxy_still(&galaxy_development, Theme::Light),
+        render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Dark),
+        render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Light),
     ]
 }
 
 /// The 120 identical still frames of one loop and their GIF, rendered once per test run.
 static ENCODED_STILL_LOOP: LazyLock<(Vec<GalaxyFrame>, Vec<u8>)> = LazyLock::new(|| {
-    let still_frame = render_galaxy_still(&read_development(), Theme::Dark);
+    let still_frame = render_galaxy_still(&read_development(), Colorway::Blue, Theme::Dark);
     let galaxy_frames = vec![still_frame; 120];
     let gif_bytes = encode_gif(&galaxy_frames).unwrap();
     (galaxy_frames, gif_bytes)

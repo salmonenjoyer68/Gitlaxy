@@ -1,15 +1,16 @@
-//! A procedural blue galaxy drawn on the native 256 by 256 canvas.
+//! A procedural galaxy drawn on the native 256 by 256 canvas.
 //!
 //! One pose comes from the account's identity seed: a tilted two-armed logarithmic
 //! spiral, a glowing core, and seeded stars. Continuous brightness is quantized with an
-//! ordered dither onto a fixed blue ramp, so a frame never exceeds one GIF palette. The
-//! whole shape grows through five stages driven by total contributions, and the loop adds
-//! a whole clockwise turn and periodic twinkle per 120 frames. This ticket renders the
-//! stages and the blue palette; later tickets add colorways without changing the canvas
-//! or encoder seam.
+//! ordered dither onto a fixed 128-level ramp built from the chosen
+//! [`Colorway`]'s palette, so a frame never exceeds one GIF palette. The whole shape grows
+//! through five stages driven by total contributions, and the loop adds a whole clockwise
+//! turn and periodic twinkle per 120 frames. Later tickets add pigments, motion states,
+//! and streak marks without changing the canvas or encoder seam.
 
 use std::f64::consts::{PI, TAU};
 
+use crate::colorway::{Colorway, Palette};
 use crate::galaxy::{GalaxyDevelopment, STAGE_COUNT, calculate_stage};
 use crate::motion;
 use crate::theme::Theme;
@@ -34,7 +35,7 @@ const STAR_OUTER_FRACTION: f64 = 0.98;
 const PIXEL_COUNT: usize = (FRAME_WIDTH_PIXELS * FRAME_HEIGHT_PIXELS) as usize;
 const CENTER_PIXELS: f64 = FRAME_WIDTH_PIXELS as f64 / 2.0;
 
-/// Levels on the blue ramp, including the exact background at level zero.
+/// Levels on the dithered ramp, including the exact background at level zero.
 const PALETTE_LEVELS: usize = 128;
 /// How much the disc is squashed vertically, giving the spiral a face-on tilt.
 const TILT: f64 = 0.78;
@@ -65,13 +66,18 @@ impl GalaxyFrame {
     }
 }
 
-/// Render one opaque still of the blue galaxy on the chosen theme background.
+/// Render one opaque still of the galaxy in `colorway` on the chosen theme background.
 ///
 /// The identity seed fixes the spiral rotation, arm phase, texture, and stars; identical
-/// developments and themes produce identical pixels without I/O, clock reads, or input
-/// mutation. The still is loop frame zero, the base pose the loop turns from.
-pub fn render_galaxy_still(development: &GalaxyDevelopment, theme: Theme) -> GalaxyFrame {
-    render_galaxy_frame(development, theme, 0)
+/// developments, colorways, and themes produce identical pixels without I/O, clock
+/// reads, or input mutation. The still is loop frame zero, the base pose the loop turns
+/// from.
+pub fn render_galaxy_still(
+    development: &GalaxyDevelopment,
+    colorway: Colorway,
+    theme: Theme,
+) -> GalaxyFrame {
+    render_galaxy_frame(development, colorway, theme, 0)
 }
 
 /// Render one frame of the seamless eight-second loop.
@@ -80,13 +86,14 @@ pub fn render_galaxy_still(development: &GalaxyDevelopment, theme: Theme) -> Gal
 /// whole turn per loop and a periodic twinkle, both derived without incremental state.
 /// Frame [`LOOP_FRAME_COUNT`] is frame zero, so the loop closes exactly. The total
 /// contributions select the same growth stage for every still and loop frame. Identical
-/// developments, themes, and frame indices produce identical pixels.
+/// developments, colorways, themes, and frame indices produce identical pixels.
 pub fn render_galaxy_frame(
     development: &GalaxyDevelopment,
+    colorway: Colorway,
     theme: Theme,
     frame_index: u32,
 ) -> GalaxyFrame {
-    let palette = build_palette(theme);
+    let palette = build_palette(colorway.palette(theme));
     let pose = GalaxyPose::at_frame(development.identity_seed, frame_index);
     let stage_scale = stage_scale(calculate_stage(development.total_contributions));
     let mut brightness = vec![0.0; PIXEL_COUNT];
@@ -114,36 +121,12 @@ pub fn render_galaxy_frame(
     GalaxyFrame::from_rgba_pixels(rgba_pixels)
 }
 
-/// The fixed blue ramp per theme, from the exact background through dark blue to the
-/// brightest core color. Ticket #5 replaces this with the six colorways.
-fn blue_ramp(theme: Theme) -> [[u8; 3]; 7] {
-    match theme {
-        Theme::Dark => [
-            [0x0d, 0x11, 0x17],
-            [0x05, 0x12, 0x29],
-            [0x1f, 0x39, 0x6a],
-            [0x32, 0x59, 0x94],
-            [0x4b, 0x82, 0xbf],
-            [0x75, 0xb7, 0xe4],
-            [0xba, 0xeb, 0xf9],
-        ],
-        Theme::Light => [
-            [0xff, 0xff, 0xff],
-            [0xc7, 0xef, 0xfa],
-            [0x89, 0xc4, 0xe9],
-            [0x5d, 0x95, 0xcc],
-            [0x44, 0x73, 0xae],
-            [0x32, 0x56, 0x8e],
-            [0x23, 0x3a, 0x69],
-        ],
-    }
-}
-
-fn build_palette(theme: Theme) -> [[u8; 4]; PALETTE_LEVELS] {
-    let anchors = blue_ramp(theme);
+/// Interpolate the colorway's anchors into the dithered ramp, background first.
+fn build_palette(palette: Palette) -> [[u8; 4]; PALETTE_LEVELS] {
+    let anchors = palette.anchors;
     let segment_count = anchors.len() - 1;
-    let mut palette = [[0; 4]; PALETTE_LEVELS];
-    for (level, color) in palette.iter_mut().enumerate() {
+    let mut ramp = [[0; 4]; PALETTE_LEVELS];
+    for (level, color) in ramp.iter_mut().enumerate() {
         let position = level as f64 / (PALETTE_LEVELS - 1) as f64 * segment_count as f64;
         let segment = (position.floor() as usize).min(segment_count - 1);
         let fraction = position - segment as f64;
@@ -156,8 +139,9 @@ fn build_palette(theme: Theme) -> [[u8; 4]; PALETTE_LEVELS] {
             0xff,
         ];
     }
-    palette[0] = theme.background();
-    palette
+    let background = anchors[0];
+    ramp[0] = [background[0], background[1], background[2], 0xff];
+    ramp
 }
 
 fn interpolate_channel(from: u8, to: u8, fraction: f64) -> u8 {

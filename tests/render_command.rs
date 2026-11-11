@@ -1,18 +1,23 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::derive_galaxy_development;
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::output::{STATIC_HEIGHT_PIXELS, STATIC_WIDTH_PIXELS, encode_gif, encode_png};
-use gitlaxy::render::{GalaxyFrame, LOOP_FRAME_COUNT, render_galaxy_frame};
+use gitlaxy::render::{GalaxyFrame, LOOP_FRAME_COUNT, render_galaxy_frame, render_galaxy_still};
 use gitlaxy::theme::Theme;
 
 const HISTORY_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/account-with-history.json"
+);
+const MISSING_SNAPSHOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/missing-snapshot.json"
 );
 const OUTPUT_FILE_NAMES: [&str; 5] = [
     "galaxy-dark.png",
@@ -24,6 +29,7 @@ const OUTPUT_FILE_NAMES: [&str; 5] = [
 
 #[test]
 fn render_writes_the_five_galaxy_files_as_the_renderer_draws_them() {
+    // No --colorway means the default blue palette, compared against below.
     let output_directory = fresh_directory("render-files");
     let command_output = run_gitlaxy(&[
         "render",
@@ -49,7 +55,9 @@ fn render_writes_the_five_galaxy_files_as_the_renderer_draws_them() {
     let galaxy_development = read_fixture_development();
     for (theme, file_stem) in [(Theme::Dark, "galaxy-dark"), (Theme::Light, "galaxy-light")] {
         let loop_frames: Vec<GalaxyFrame> = (0..LOOP_FRAME_COUNT)
-            .map(|frame_index| render_galaxy_frame(&galaxy_development, theme, frame_index))
+            .map(|frame_index| {
+                render_galaxy_frame(&galaxy_development, Colorway::Blue, theme, frame_index)
+            })
             .collect();
         assert_eq!(
             fs::read(output_directory.join(format!("{file_stem}.png"))).unwrap(),
@@ -232,6 +240,160 @@ fn render_usage_errors_exit_two_and_help_exits_zero() {
 }
 
 #[test]
+fn every_colorway_name_is_accepted_in_either_flag_order() {
+    for (index, colorway) in Colorway::ALL.into_iter().enumerate() {
+        let output_directory =
+            fresh_directory(&format!("render-colorway-accepted-{}", colorway.name()));
+        let output_directory = output_directory.to_str().unwrap();
+        // A missing snapshot reaches rendering, so exit 1 proves the flags parsed.
+        let command_output = if index % 2 == 0 {
+            run_gitlaxy(&[
+                "render",
+                MISSING_SNAPSHOT,
+                "--output-dir",
+                output_directory,
+                "--colorway",
+                colorway.name(),
+            ])
+        } else {
+            run_gitlaxy(&[
+                "render",
+                MISSING_SNAPSHOT,
+                "--colorway",
+                colorway.name(),
+                "--output-dir",
+                output_directory,
+            ])
+        };
+        assert_eq!(
+            command_output.status.code(),
+            Some(1),
+            "{}",
+            String::from_utf8_lossy(&command_output.stderr)
+        );
+        assert!(!String::from_utf8_lossy(&command_output.stderr).starts_with("Usage:"));
+    }
+}
+
+#[test]
+fn invalid_render_colorways_are_usage_errors() {
+    let output_directory = fresh_directory("render-colorway-errors");
+    let output_directory = output_directory.to_str().unwrap();
+    for invalid_arguments in [
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            output_directory,
+            "--colorway",
+        ][..],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            output_directory,
+            "--colorway",
+            "teal",
+        ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            output_directory,
+            "--colorway",
+            "blue",
+            "--colorway",
+            "red",
+        ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            output_directory,
+            "--output-dir",
+            output_directory,
+        ],
+        &[
+            "render",
+            HISTORY_FIXTURE,
+            "--colorway",
+            "blue",
+            "--body",
+            "blue",
+            "--output-dir",
+            output_directory,
+        ],
+    ] {
+        let command_output = run_gitlaxy(invalid_arguments);
+        assert_eq!(
+            command_output.status.code(),
+            Some(2),
+            "{invalid_arguments:?}"
+        );
+        assert!(String::from_utf8_lossy(&command_output.stderr).starts_with("Usage:"));
+    }
+}
+
+#[test]
+fn a_non_blue_colorway_renders_both_themes_and_keeps_the_output_shape() {
+    let output_directory = fresh_directory("render-colorway-purple");
+    let command_output = run_gitlaxy(&[
+        "render",
+        HISTORY_FIXTURE,
+        "--colorway",
+        "purple",
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        command_output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&command_output.stderr)
+    );
+    let written_names: BTreeSet<String> = fs::read_dir(&output_directory)
+        .unwrap()
+        .map(|directory_entry| directory_entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(
+        written_names,
+        OUTPUT_FILE_NAMES.map(str::to_owned).into_iter().collect()
+    );
+
+    let galaxy_development = read_fixture_development();
+    for theme in [Theme::Dark, Theme::Light] {
+        let file_stem = format!("galaxy-{}", theme.name());
+        let png_pixels =
+            decode_png(&fs::read(output_directory.join(format!("{file_stem}.png"))).unwrap());
+        assert_eq!(
+            png_pixels.len(),
+            (STATIC_WIDTH_PIXELS * STATIC_HEIGHT_PIXELS) as usize
+        );
+        assert_eq!(png_pixels[0], theme.background());
+        assert!(png_pixels.iter().all(|pixel| pixel[3] == 255));
+
+        let gif_bytes = fs::read(output_directory.join(format!("{file_stem}.gif"))).unwrap();
+        let mut gif_options = gif::DecodeOptions::new();
+        gif_options.set_color_output(gif::ColorOutput::RGBA);
+        let mut gif_decoder = gif_options.read_info(gif_bytes.as_slice()).unwrap();
+        let mut frame_count = 0;
+        while gif_decoder.read_next_frame().unwrap().is_some() {
+            frame_count += 1;
+        }
+        assert_eq!(frame_count, LOOP_FRAME_COUNT as usize);
+
+        let blue_frame = render_galaxy_still(&galaxy_development, Colorway::Blue, theme);
+        assert_ne!(
+            dominant_color(&png_pixels, theme.background()),
+            dominant_color(&rgba_pixels(&blue_frame), theme.background()),
+            "purple did not replace blue on {theme:?}"
+        );
+    }
+    let preview_html = fs::read_to_string(output_directory.join("preview.html")).unwrap();
+    assert!(preview_html.contains("purple galaxy"));
+}
+
+#[test]
 fn version_prints_the_manifest_version_and_exits_zero() {
     let version_output = run_gitlaxy(&["--version"]);
     assert_eq!(version_output.status.code(), Some(0));
@@ -261,6 +423,41 @@ fn decode_png(png_bytes: &[u8]) -> Vec<[u8; 4]> {
     assert_eq!(png_info.color_type, png::ColorType::Rgba);
     png_buffer.truncate(png_info.buffer_size());
     png_buffer.as_chunks::<4>().0.to_vec()
+}
+
+fn rgba_pixels(galaxy_frame: &GalaxyFrame) -> Vec<[u8; 4]> {
+    galaxy_frame
+        .as_rgba_bytes()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|channels| {
+            let [red, green, blue, alpha] = channels;
+            [*red, *green, *blue, *alpha]
+        })
+        .collect()
+}
+
+/// The most frequent pixel that is clearly distinct from the background.
+fn dominant_color(pixels: &[[u8; 4]], background: [u8; 4]) -> [u8; 4] {
+    let mut counts = BTreeMap::new();
+    for pixel in pixels {
+        if pixel_distance(*pixel, background) > 24 * 24 {
+            *counts.entry(*pixel).or_insert(0usize) += 1;
+        }
+    }
+    *counts
+        .iter()
+        .max_by_key(|(_, count)| **count)
+        .expect("a galaxy has pixels away from its background")
+        .0
+}
+
+fn pixel_distance(left: [u8; 4], right: [u8; 4]) -> u32 {
+    left.into_iter()
+        .zip(right)
+        .map(|(left_channel, right_channel)| u32::from(left_channel.abs_diff(right_channel)).pow(2))
+        .sum()
 }
 
 /// An empty directory of the given name under Cargo's scratch space for tests.

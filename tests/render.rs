@@ -1,5 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::{
     GalaxyDevelopment, MAX_GROWTH_CONTRIBUTIONS, calculate_stage, derive_galaxy_development,
 };
@@ -14,7 +15,7 @@ const HISTORY_FIXTURE: &str = include_str!("fixtures/account-with-history.json")
 #[test]
 fn the_still_is_fully_opaque_on_the_exact_theme_background() {
     for theme in [Theme::Dark, Theme::Light] {
-        let galaxy_frame = render_galaxy_still(&read_development(), theme);
+        let galaxy_frame = render_galaxy_still(&read_development(), Colorway::Blue, theme);
         let pixels = opaque_pixels(&galaxy_frame);
         assert_eq!(
             pixels.len(),
@@ -34,7 +35,7 @@ fn the_still_is_fully_opaque_on_the_exact_theme_background() {
 #[test]
 fn both_themes_draw_a_blue_galaxy_with_no_other_hue() {
     for theme in [Theme::Dark, Theme::Light] {
-        let galaxy_frame = render_galaxy_still(&read_development(), theme);
+        let galaxy_frame = render_galaxy_still(&read_development(), Colorway::Blue, theme);
         let background = theme.background();
         let mut galaxy_colors = BTreeSet::new();
         for pixel in opaque_pixels(&galaxy_frame) {
@@ -56,28 +57,28 @@ fn the_same_development_and_theme_render_identical_pixels() {
     let galaxy_development = read_development();
     for theme in [Theme::Dark, Theme::Light] {
         assert_eq!(
-            render_galaxy_still(&galaxy_development, theme),
-            render_galaxy_still(&galaxy_development, theme)
+            render_galaxy_still(&galaxy_development, Colorway::Blue, theme),
+            render_galaxy_still(&galaxy_development, Colorway::Blue, theme)
         );
     }
     assert_ne!(
-        render_galaxy_still(&galaxy_development, Theme::Dark),
-        render_galaxy_still(&galaxy_development, Theme::Light)
+        render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Dark),
+        render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Light)
     );
     let mut other_snapshot = read_snapshot();
     other_snapshot.account_id += 1;
     let mut other_development = derive_galaxy_development(&other_snapshot).unwrap();
     other_development.total_contributions = MAX_GROWTH_CONTRIBUTIONS;
     assert_ne!(
-        render_galaxy_still(&galaxy_development, Theme::Dark),
-        render_galaxy_still(&other_development, Theme::Dark)
+        render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Dark),
+        render_galaxy_still(&other_development, Colorway::Blue, Theme::Dark)
     );
 }
 
 #[test]
 fn ordered_dithering_stays_under_the_gif_palette_ceiling() {
     for theme in [Theme::Dark, Theme::Light] {
-        let galaxy_frame = render_galaxy_still(&read_development(), theme);
+        let galaxy_frame = render_galaxy_still(&read_development(), Colorway::Blue, theme);
         let colors: BTreeSet<[u8; 4]> = opaque_pixels(&galaxy_frame).into_iter().collect();
         assert!(colors.len() <= 255, "{} colors", colors.len());
     }
@@ -85,7 +86,7 @@ fn ordered_dithering_stays_under_the_gif_palette_ceiling() {
 
 #[test]
 fn the_galaxy_is_centered_with_a_clear_margin() {
-    let galaxy_frame = render_galaxy_still(&read_development(), Theme::Dark);
+    let galaxy_frame = render_galaxy_still(&read_development(), Colorway::Blue, Theme::Dark);
     let (left, top, right, bottom) = opaque_bounds(&galaxy_frame, Theme::Dark.background());
     assert!(left > 5 && top > 5);
     assert!(right < FRAME_WIDTH_PIXELS - 6 && bottom < FRAME_HEIGHT_PIXELS - 6);
@@ -98,7 +99,7 @@ fn the_galaxy_is_centered_with_a_clear_margin() {
 fn the_first_stage_is_a_single_spark() {
     let galaxy_development = development_with_total(0);
     assert_eq!(calculate_stage(galaxy_development.total_contributions), 1);
-    let galaxy_frame = render_galaxy_still(&galaxy_development, Theme::Dark);
+    let galaxy_frame = render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Dark);
     let (left, top, right, bottom) = opaque_bounds(&galaxy_frame, Theme::Dark.background());
     let width = right - left + 1;
     let height = bottom - top + 1;
@@ -116,7 +117,7 @@ fn the_first_stage_is_a_single_spark() {
 fn the_last_stage_fills_about_eighty_five_percent_of_the_canvas() {
     let galaxy_development = development_with_total(MAX_GROWTH_CONTRIBUTIONS);
     assert_eq!(calculate_stage(galaxy_development.total_contributions), 5);
-    let galaxy_frame = render_galaxy_still(&galaxy_development, Theme::Dark);
+    let galaxy_frame = render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Dark);
     let (left, _, right, _) = opaque_bounds(&galaxy_frame, Theme::Dark.background());
     let expected_width = f64::from(FRAME_WIDTH_PIXELS) * 0.85;
     let width = f64::from(right - left + 1);
@@ -133,7 +134,7 @@ fn increasing_totals_grow_the_galaxy_through_every_stage() {
     for (stage_index, total) in totals.into_iter().enumerate() {
         let galaxy_development = development_with_total(total);
         assert_eq!(calculate_stage(total), stage_index as u8 + 1);
-        let galaxy_frame = render_galaxy_still(&galaxy_development, Theme::Dark);
+        let galaxy_frame = render_galaxy_still(&galaxy_development, Colorway::Blue, Theme::Dark);
         let (left, top, right, bottom) = opaque_bounds(&galaxy_frame, Theme::Dark.background());
         let extent = (right - left + 1).max(bottom - top + 1);
         assert!(
@@ -150,19 +151,61 @@ fn still_and_loop_frames_render_the_development_stage() {
     let spark_development = development_with_total(0);
     let full_development = development_with_total(MAX_GROWTH_CONTRIBUTIONS);
     for frame_index in [0, 1, 60, 119] {
-        let spark_frame = render_galaxy_frame(&spark_development, Theme::Dark, frame_index);
+        let spark_frame =
+            render_galaxy_frame(&spark_development, Colorway::Blue, Theme::Dark, frame_index);
         let (left, _, right, _) = opaque_bounds(&spark_frame, Theme::Dark.background());
         assert!(
             right - left < 20,
             "frame {frame_index} of stage one is not a spark"
         );
-        let full_frame = render_galaxy_frame(&full_development, Theme::Dark, frame_index);
+        let full_frame =
+            render_galaxy_frame(&full_development, Colorway::Blue, Theme::Dark, frame_index);
         let (left, _, right, _) = opaque_bounds(&full_frame, Theme::Dark.background());
         assert!(
             right - left + 1 >= 180,
             "frame {frame_index} of stage five is too small"
         );
     }
+}
+
+#[test]
+fn each_colorway_draws_a_distinct_dominant_palette_in_both_themes() {
+    let galaxy_development = read_development();
+    for theme in [Theme::Dark, Theme::Light] {
+        let mut dominants = BTreeSet::new();
+        for colorway in Colorway::ALL {
+            let galaxy_frame = render_galaxy_still(&galaxy_development, colorway, theme);
+            let background = theme.background();
+            let mut counts = BTreeMap::new();
+            for pixel in opaque_pixels(&galaxy_frame) {
+                if pixel_distance(pixel, background) > 24 {
+                    *counts.entry(pixel).or_insert(0usize) += 1;
+                }
+            }
+            let (&dominant, &count) = counts
+                .iter()
+                .max_by_key(|(_, count)| **count)
+                .expect("a galaxy has many non-background pixels");
+            assert!(
+                count > 100,
+                "{} on {theme:?} has too few dominant pixels",
+                colorway.name()
+            );
+            assert!(
+                dominants.insert(dominant),
+                "{} shares its dominant {dominant:?} on {theme:?}",
+                colorway.name()
+            );
+        }
+        assert_eq!(dominants.len(), Colorway::ALL.len());
+    }
+}
+
+fn pixel_distance(left: [u8; 4], right: [u8; 4]) -> u32 {
+    left.into_iter()
+        .zip(right)
+        .map(|(left_channel, right_channel)| u32::from(left_channel.abs_diff(right_channel)).pow(2))
+        .sum()
 }
 
 fn read_snapshot() -> AccountSnapshot {
