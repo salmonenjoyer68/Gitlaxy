@@ -5,14 +5,19 @@
 //! ordered dither onto a fixed 128-level ramp built from the chosen
 //! [`Colorway`]'s palette, so a frame never exceeds one GIF palette. The whole shape grows
 //! through five stages driven by total contributions, and the loop adds a whole clockwise
-//! turn and periodic twinkle per 120 frames. Later tickets add pigments, motion states,
-//! and streak marks without changing the canvas or encoder seam.
+//! turn and periodic twinkle per 120 frames. A running streak adds a comet trail along
+//! one arm and a break in the longest streak adds seeded stars, both from
+//! [`crate::markings`]; later tickets add pigments and motion states without changing
+//! the canvas or encoder seam.
 
 use std::f64::consts::{PI, TAU};
 
 use crate::colorway::{Colorway, Palette};
 use crate::galaxy::{GalaxyDevelopment, STAGE_COUNT, calculate_stage};
+use crate::markings::{StreakMarks, calculate_star_count, calculate_streak_marks};
 use crate::motion;
+use crate::motion_state;
+use crate::motion_state::MotionState;
 use crate::pigment::{Pigment, PigmentShare, pigment_color, pigment_shares, select_pigment};
 use crate::theme::Theme;
 
@@ -45,7 +50,14 @@ const CORE_RADIUS: f64 = 17.0;
 const CORE_HALO_RADIUS: f64 = 38.0;
 const DISK_FALLOFF_RADIUS: f64 = 42.0;
 const ARM_FALLOFF_RADIUS: f64 = 52.0;
-const STAR_COUNT: usize = 160;
+/// Peak added brightness of a flare blooming out of the galaxy's core.
+const FLARE_GLOW_PEAK: f64 = 1.6;
+/// Radius the flare's glow fades across, in canvas pixels.
+const FLARE_GLOW_RADIUS: f64 = 42.0;
+/// Peak brightness the comet trail adds at full strength.
+const TRAIL_PEAK_BRIGHTNESS: f64 = 0.55;
+/// Half-width of the comet trail across the arm, in pixels.
+const TRAIL_WIDTH_PIXELS: f64 = 1.8;
 
 /// Share of stars whose core takes a pigment color; the rest stay in the colorway.
 const PIGMENT_STAR_FRACTION: f64 = 0.42;
@@ -114,8 +126,13 @@ pub fn render_galaxy_frame(
 ) -> GalaxyFrame {
     let palette = build_palette(colorway.palette(theme));
     let pose = GalaxyPose::at_frame(development.identity_seed, frame_index);
+    let motion_state = motion_state::select_motion_state(development);
+    let brightness_scale = motion::brightness_scale(motion_state);
+    let flare_intensity =
+        motion::flare_intensity(development.identity_seed, frame_index, motion_state);
     let stage_scale = stage_scale(calculate_stage(development.total_contributions));
     let language_pigments = pigment_shares(development);
+    let streak_marks = calculate_streak_marks(development);
     let mut tint = vec![None; PIXEL_COUNT];
     let mut brightness = vec![0.0; PIXEL_COUNT];
     paint_galaxy(
@@ -123,16 +140,20 @@ pub fn render_galaxy_frame(
         &mut tint,
         &pose,
         stage_scale,
+        flare_intensity,
         &language_pigments,
     );
+    paint_trail(&mut brightness, &pose, stage_scale, &streak_marks);
     paint_stars(
         &mut brightness,
         &mut tint,
         &pose,
         development.identity_seed,
         frame_index,
+        motion_state,
         stage_scale,
         &language_pigments,
+        calculate_star_count(development.streaks.longest.len()),
     );
     let rgba_pixels = brightness
         .into_iter()
@@ -142,7 +163,8 @@ pub fn render_galaxy_frame(
                 pixel_index % FRAME_WIDTH_PIXELS as usize,
                 pixel_index / FRAME_WIDTH_PIXELS as usize,
             );
-            let position = intensity.clamp(0.0, 1.0) * (PALETTE_LEVELS - 1) as f64;
+            let position =
+                (intensity * brightness_scale).clamp(0.0, 1.0) * (PALETTE_LEVELS - 1) as f64;
             let level = (position + threshold).floor() as usize;
             let level = level.min(PALETTE_LEVELS - 1);
             match tint[pixel_index] {
@@ -235,6 +257,7 @@ fn paint_galaxy(
     tint: &mut [Option<Pigment>],
     pose: &GalaxyPose,
     scale: f64,
+    flare_intensity: f64,
     pigment_shares: &[PigmentShare],
 ) {
     let outer_radius = BASE_OUTER_RADIUS * scale;
@@ -256,7 +279,11 @@ fn paint_galaxy(
             + 0.16 * value_noise(pose.texture_seed, disc_x * 0.11, disc_y * 0.11, 0)
             + 0.06 * value_noise(pose.texture_seed, disc_x * 0.31, disc_y * 0.31, 1);
         let fade = 1.0 - smooth_step(screen_radius, fade_start, outer_radius);
-        *value = (core + (disk + arm) * texture) * fade;
+        let flare = flare_intensity
+            * FLARE_GLOW_PEAK
+            * (-(screen_radius / (FLARE_GLOW_RADIUS * 0.67)).powi(2)).exp()
+            * (1.0 - smooth_step(screen_radius, FLARE_GLOW_RADIUS * 0.83, FLARE_GLOW_RADIUS));
+        *value = (core + (disk + arm) * texture) * fade + flare;
         if !pigment_shares.is_empty() {
             let accent_coordinate_x = disc_x * PIGMENT_ACCENT_SCALE;
             let accent_coordinate_y = disc_y * PIGMENT_ACCENT_SCALE;
@@ -299,6 +326,37 @@ fn arm_profile(disc_x: f64, disc_y: f64, radius: f64, arm_phase: f64, scale: f64
     gate * (-radius / (ARM_FALLOFF_RADIUS * scale)).exp() * first_arm.max(second_arm)
 }
 
+/// Add the running streak's comet glint along one spiral arm.
+///
+/// The trail starts just outside the core and covers `trail_length` of the arm, so a
+/// longer streak reaches further out; its brightness is `trail_strength`. It is drawn
+/// in disc coordinates, so it turns with the galaxy and the loop closes exactly. With
+/// no running streak the trail length is zero and nothing is painted.
+fn paint_trail(brightness: &mut [f64], pose: &GalaxyPose, scale: f64, streak_marks: &StreakMarks) {
+    if streak_marks.trail_length <= 0.0 {
+        return;
+    }
+    let core_radius = CORE_RADIUS * scale;
+    let outer_radius = BASE_OUTER_RADIUS * STAR_OUTER_FRACTION * scale;
+    let start_radius = core_radius * 1.5;
+    let end_radius = start_radius + (outer_radius - start_radius) * streak_marks.trail_length;
+    let taper_width = 2.0 * scale;
+    for (pixel_index, value) in brightness.iter_mut().enumerate() {
+        let offset_x = (pixel_index as u32 % FRAME_WIDTH_PIXELS) as f64 - CENTER_PIXELS;
+        let offset_y = (pixel_index / FRAME_WIDTH_PIXELS as usize) as f64 - CENTER_PIXELS;
+        let [disc_x, disc_y] = pose.to_disc(offset_x, offset_y);
+        let radius = disc_x.hypot(disc_y);
+        if radius < start_radius || radius >= end_radius || radius < 1.0 {
+            continue;
+        }
+        let spiral_angle = (radius / core_radius).ln() * ARM_PITCH + pose.arm_phase;
+        let lateral_distance = wrap_angle(disc_y.atan2(disc_x) - spiral_angle) * radius;
+        let across = (-(lateral_distance / TRAIL_WIDTH_PIXELS).powi(2)).exp();
+        let along = smooth_step(radius, start_radius, start_radius + taper_width);
+        *value += TRAIL_PEAK_BRIGHTNESS * streak_marks.trail_strength * across * along;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn paint_stars(
     brightness: &mut [f64],
@@ -306,16 +364,18 @@ fn paint_stars(
     pose: &GalaxyPose,
     identity_seed: u64,
     frame_index: u32,
+    state: MotionState,
     scale: f64,
     pigment_shares: &[PigmentShare],
+    star_count: usize,
 ) {
     let star_outer_radius = BASE_OUTER_RADIUS * STAR_OUTER_FRACTION * scale;
     let mut rng = SeededRng::new(pose.texture_seed);
-    for star_index in 0..STAR_COUNT {
+    for star_index in 0..star_count {
         let radius = star_outer_radius * rng.unit().powf(1.35);
         let angle = rng.unit() * TAU;
         let peak = (0.25 + 0.75 * rng.unit().powi(2))
-            * motion::twinkle_scale(identity_seed, star_index, frame_index);
+            * motion::twinkle_scale(identity_seed, star_index, frame_index, state);
         let sigma = 0.55 + 0.55 * rng.unit();
         let star_pigment = if !pigment_shares.is_empty()
             && hash_unit(identity_seed, star_index as i64, 0, PIGMENT_STAR_SALT)
