@@ -3,13 +3,14 @@
 //! One pose comes from the account's identity seed: a tilted two-armed logarithmic
 //! spiral, a glowing core, and seeded stars. Continuous brightness is quantized with an
 //! ordered dither onto a fixed blue ramp, so a frame never exceeds one GIF palette. The
-//! loop adds a whole clockwise turn and periodic twinkle per 120 frames. This ticket
-//! renders the fixed middle stage and the blue palette; later tickets add
-//! contribution-driven stages and colorways without changing the canvas or encoder seam.
+//! whole shape grows through five stages driven by total contributions, and the loop adds
+//! a whole clockwise turn and periodic twinkle per 120 frames. This ticket renders the
+//! stages and the blue palette; later tickets add colorways without changing the canvas
+//! or encoder seam.
 
 use std::f64::consts::{PI, TAU};
 
-use crate::galaxy::GalaxyDevelopment;
+use crate::galaxy::{GalaxyDevelopment, STAGE_COUNT, calculate_stage};
 use crate::motion;
 use crate::theme::Theme;
 
@@ -19,8 +20,16 @@ pub const FRAME_WIDTH_PIXELS: u32 = 256;
 pub const FRAME_HEIGHT_PIXELS: u32 = FRAME_WIDTH_PIXELS;
 /// Frames in one loop: a whole rotation and whole twinkle cycles.
 pub const LOOP_FRAME_COUNT: u32 = 120;
-/// The fixed middle stage this ticket renders; ticket #4 derives stages from totals.
-pub const STILL_STAGE: u8 = 3;
+/// The last stage's diameter as a share of the canvas width.
+const FULL_STAGE_EXTENT_FRACTION: f64 = 0.85;
+/// The first stage's outer radius: a single spark, far smaller than any arm or star field.
+const SPARK_OUTER_RADIUS: f64 = 6.0;
+/// The outer radius the shape constants below were authored against.
+const BASE_OUTER_RADIUS: f64 = FRAME_WIDTH_PIXELS as f64 * 0.33;
+/// How much of the outer radius the disc is visible across before fading out.
+const FADE_START_FRACTION: f64 = 0.78;
+/// How far seeded stars may reach, as a share of the stage's outer radius.
+const STAR_OUTER_FRACTION: f64 = 0.98;
 
 const PIXEL_COUNT: usize = (FRAME_WIDTH_PIXELS * FRAME_HEIGHT_PIXELS) as usize;
 const CENTER_PIXELS: f64 = FRAME_WIDTH_PIXELS as f64 / 2.0;
@@ -34,10 +43,7 @@ const CORE_RADIUS: f64 = 17.0;
 const CORE_HALO_RADIUS: f64 = 38.0;
 const DISK_FALLOFF_RADIUS: f64 = 42.0;
 const ARM_FALLOFF_RADIUS: f64 = 52.0;
-const STAGE_OUTER_RADIUS: f64 = FRAME_WIDTH_PIXELS as f64 * 0.33;
-const STAGE_FADE_START: f64 = STAGE_OUTER_RADIUS * 0.78;
 const STAR_COUNT: usize = 160;
-const STAR_OUTER_RADIUS: f64 = STAGE_OUTER_RADIUS * 0.98;
 
 /// A renderer-owned, fixed-size frame with row-major RGBA pixels.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -72,7 +78,8 @@ pub fn render_galaxy_still(development: &GalaxyDevelopment, theme: Theme) -> Gal
 ///
 /// The base pose comes from the identity seed; the frame index adds a rotation of one
 /// whole turn per loop and a periodic twinkle, both derived without incremental state.
-/// Frame [`LOOP_FRAME_COUNT`] is frame zero, so the loop closes exactly. Identical
+/// Frame [`LOOP_FRAME_COUNT`] is frame zero, so the loop closes exactly. The total
+/// contributions select the same growth stage for every still and loop frame. Identical
 /// developments, themes, and frame indices produce identical pixels.
 pub fn render_galaxy_frame(
     development: &GalaxyDevelopment,
@@ -81,13 +88,15 @@ pub fn render_galaxy_frame(
 ) -> GalaxyFrame {
     let palette = build_palette(theme);
     let pose = GalaxyPose::at_frame(development.identity_seed, frame_index);
+    let stage_scale = stage_scale(calculate_stage(development.total_contributions));
     let mut brightness = vec![0.0; PIXEL_COUNT];
-    paint_galaxy(&mut brightness, &pose);
+    paint_galaxy(&mut brightness, &pose, stage_scale);
     paint_stars(
         &mut brightness,
         &pose,
         development.identity_seed,
         frame_index,
+        stage_scale,
     );
     let rgba_pixels = brightness
         .into_iter()
@@ -194,49 +203,66 @@ impl GalaxyPose {
     }
 }
 
-fn paint_galaxy(brightness: &mut [f64], pose: &GalaxyPose) {
+/// Map a stage to the multiplier the shape's radii were authored against.
+fn stage_scale(stage: u8) -> f64 {
+    let step = f64::from(stage.clamp(1, STAGE_COUNT) - 1) / f64::from(STAGE_COUNT - 1);
+    let full_radius = FRAME_WIDTH_PIXELS as f64 * FULL_STAGE_EXTENT_FRACTION / 2.0;
+    let outer_radius = SPARK_OUTER_RADIUS + (full_radius - SPARK_OUTER_RADIUS) * step;
+    outer_radius / BASE_OUTER_RADIUS
+}
+
+fn paint_galaxy(brightness: &mut [f64], pose: &GalaxyPose, scale: f64) {
+    let outer_radius = BASE_OUTER_RADIUS * scale;
+    let fade_start = outer_radius * FADE_START_FRACTION;
     for (pixel_index, value) in brightness.iter_mut().enumerate() {
         let offset_x = (pixel_index as u32 % FRAME_WIDTH_PIXELS) as f64 - CENTER_PIXELS;
         let offset_y = (pixel_index / FRAME_WIDTH_PIXELS as usize) as f64 - CENTER_PIXELS;
         let screen_radius = offset_x.hypot(offset_y);
-        if screen_radius >= STAGE_OUTER_RADIUS {
+        if screen_radius >= outer_radius {
             continue;
         }
         let [disc_x, disc_y] = pose.to_disc(offset_x, offset_y);
         let radius = disc_x.hypot(disc_y);
-        let core = (-(radius / CORE_RADIUS).powi(2)).exp()
-            + 0.3 * (-(radius / CORE_HALO_RADIUS).powi(2)).exp();
-        let disk = 0.34 * (-radius / DISK_FALLOFF_RADIUS).exp();
-        let arm = 0.4 * arm_profile(disc_x, disc_y, radius, pose.arm_phase);
+        let core = (-(radius / (CORE_RADIUS * scale)).powi(2)).exp()
+            + 0.3 * (-(radius / (CORE_HALO_RADIUS * scale)).powi(2)).exp();
+        let disk = 0.34 * (-radius / (DISK_FALLOFF_RADIUS * scale)).exp();
+        let arm = 0.4 * arm_profile(disc_x, disc_y, radius, pose.arm_phase, scale);
         let texture = 0.9
             + 0.16 * value_noise(pose.texture_seed, disc_x * 0.11, disc_y * 0.11, 0)
             + 0.06 * value_noise(pose.texture_seed, disc_x * 0.31, disc_y * 0.31, 1);
-        let fade = 1.0 - smooth_step(screen_radius, STAGE_FADE_START, STAGE_OUTER_RADIUS);
+        let fade = 1.0 - smooth_step(screen_radius, fade_start, outer_radius);
         *value = (core + (disk + arm) * texture) * fade;
     }
 }
 
 /// The two-armed logarithmic spiral's local brightness, gated away from the core and
 /// falling off with radius.
-fn arm_profile(disc_x: f64, disc_y: f64, radius: f64, arm_phase: f64) -> f64 {
+fn arm_profile(disc_x: f64, disc_y: f64, radius: f64, arm_phase: f64, scale: f64) -> f64 {
     if radius < 1.0 {
         return 0.0;
     }
     let angle = disc_y.atan2(disc_x);
-    let spiral_angle = (radius / CORE_RADIUS).ln() * ARM_PITCH + arm_phase;
+    let spiral_angle = (radius / (CORE_RADIUS * scale)).ln() * ARM_PITCH + arm_phase;
     let first_delta = wrap_angle(angle - spiral_angle);
     let second_delta = wrap_angle(first_delta - PI);
     let arm_width = 0.16 + 3.2 / radius;
     let first_arm = (-(first_delta / arm_width).powi(2)).exp();
     let second_arm = (-(second_delta / arm_width).powi(2)).exp();
-    let gate = smooth_step(radius, 6.0, 24.0);
-    gate * (-radius / ARM_FALLOFF_RADIUS).exp() * first_arm.max(second_arm)
+    let gate = smooth_step(radius, 6.0 * scale, 24.0 * scale);
+    gate * (-radius / (ARM_FALLOFF_RADIUS * scale)).exp() * first_arm.max(second_arm)
 }
 
-fn paint_stars(brightness: &mut [f64], pose: &GalaxyPose, identity_seed: u64, frame_index: u32) {
+fn paint_stars(
+    brightness: &mut [f64],
+    pose: &GalaxyPose,
+    identity_seed: u64,
+    frame_index: u32,
+    scale: f64,
+) {
+    let star_outer_radius = BASE_OUTER_RADIUS * STAR_OUTER_FRACTION * scale;
     let mut rng = SeededRng::new(pose.texture_seed);
     for star_index in 0..STAR_COUNT {
-        let radius = STAR_OUTER_RADIUS * rng.unit().powf(1.35);
+        let radius = star_outer_radius * rng.unit().powf(1.35);
         let angle = rng.unit() * TAU;
         let peak = (0.25 + 0.75 * rng.unit().powi(2))
             * motion::twinkle_scale(identity_seed, star_index, frame_index);

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use chrono::{Days, NaiveDate};
 use gitlaxy::galaxy::{
     GalaxyDevelopmentError, MAX_GROWTH_CONTRIBUTIONS, RecentActivity, RecentStreak,
-    calculate_growth_fraction, derive_galaxy_development,
+    calculate_growth_fraction, calculate_stage, derive_galaxy_development,
 };
 use gitlaxy::history::{
     AccountSnapshot, ConflictingRepository, ContributionDay, ContributionHistory,
@@ -324,6 +324,29 @@ fn growth_rises_with_contributions_and_stops_at_the_cap() {
         calculate_growth_fraction(u64::MAX)
     );
     assert_eq!(calculate_growth_fraction(u64::MAX), 1.0);
+}
+
+#[test]
+fn stages_split_the_growth_fraction_into_equal_fifths() {
+    // Each threshold is the first total whose growth fraction reaches the next fifth.
+    for (stage, boundary_total) in [(2u8, 179u64), (3, 996), (4, 4_734), (5, 21_826)] {
+        let fifth = f64::from(stage - 1) / 5.0;
+        assert_eq!(calculate_stage(boundary_total - 1), stage - 1);
+        assert_eq!(calculate_stage(boundary_total), stage);
+        assert!(calculate_growth_fraction(boundary_total - 1) < fifth);
+        assert!(calculate_growth_fraction(boundary_total) >= fifth);
+    }
+}
+
+#[test]
+fn stage_boundaries_cover_zero_max_and_beyond() {
+    assert_eq!(calculate_stage(0), 1);
+    assert_eq!(calculate_stage(178), 1);
+    assert_eq!(calculate_stage(995), 2);
+    assert_eq!(calculate_stage(4_733), 3);
+    assert_eq!(calculate_stage(21_825), 4);
+    assert_eq!(calculate_stage(MAX_GROWTH_CONTRIBUTIONS), 5);
+    assert_eq!(calculate_stage(u64::MAX), 5);
 }
 
 fn build_snapshot_with_counts(daily_counts: &[u32]) -> AccountSnapshot {

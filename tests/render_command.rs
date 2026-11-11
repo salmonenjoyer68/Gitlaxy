@@ -65,7 +65,7 @@ fn render_writes_the_five_galaxy_files_as_the_renderer_draws_them() {
     assert!(preview_html.contains(&observation_date));
     let summary_line = String::from_utf8_lossy(&command_output.stdout);
     assert!(summary_line.contains(&observation_date));
-    assert!(summary_line.contains("stage 3"));
+    assert!(summary_line.contains("stage 1"));
 }
 
 #[test]
