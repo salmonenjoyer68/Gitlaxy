@@ -19,6 +19,7 @@
 pub mod collect;
 pub mod galaxy;
 pub mod history;
+pub mod motion;
 pub mod output;
 pub mod render;
 pub mod theme;
