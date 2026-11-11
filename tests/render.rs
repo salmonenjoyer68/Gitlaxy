@@ -1,10 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{Datelike, Days, NaiveDate};
 use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::{
-    GalaxyDevelopment, MAX_GROWTH_CONTRIBUTIONS, calculate_stage, derive_galaxy_development,
+    GalaxyDevelopment, MAX_GROWTH_CONTRIBUTIONS, RecentStreak, StreakDevelopment, calculate_stage,
+    derive_galaxy_development,
 };
-use gitlaxy::history::AccountSnapshot;
+use gitlaxy::history::{AccountSnapshot, ContributionWeek};
+use gitlaxy::markings::{STAR_DENSITY_FULL_WEEKS, TRAIL_FULL_WEEKS};
 use gitlaxy::render::{
     FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, GalaxyFrame, render_galaxy_frame, render_galaxy_still,
 };
@@ -201,6 +204,71 @@ fn each_colorway_draws_a_distinct_dominant_palette_in_both_themes() {
     }
 }
 
+#[test]
+fn a_current_streak_draws_a_longer_trail_in_stills_and_loop_frames() {
+    let no_streak = development_with_streaks(0, 0);
+    let short_streak = development_with_streaks(2, 0);
+    let long_streak = development_with_streaks(TRAIL_FULL_WEEKS, 0);
+    let capped_streak = development_with_streaks(TRAIL_FULL_WEEKS * 4, 0);
+    for theme in [Theme::Dark, Theme::Light] {
+        for frame_index in [0, 60] {
+            let no_streak_frame =
+                render_galaxy_frame(&no_streak, Colorway::Blue, theme, frame_index);
+            let short_streak_frame =
+                render_galaxy_frame(&short_streak, Colorway::Blue, theme, frame_index);
+            let long_streak_frame =
+                render_galaxy_frame(&long_streak, Colorway::Blue, theme, frame_index);
+            let short_trail = differing_pixels(&no_streak_frame, &short_streak_frame);
+            let long_trail = differing_pixels(&no_streak_frame, &long_streak_frame);
+            assert!(
+                short_trail > 0,
+                "frame {frame_index} of a two-week streak shows no trail"
+            );
+            assert!(
+                long_trail > short_trail,
+                "frame {frame_index}: {long_trail} trail pixels are not more than {short_trail}"
+            );
+            let capped_streak_frame =
+                render_galaxy_frame(&capped_streak, Colorway::Blue, theme, frame_index);
+            assert_eq!(long_streak_frame, capped_streak_frame);
+        }
+    }
+}
+
+#[test]
+fn a_longest_streak_raises_star_density_in_stills_and_loop_frames() {
+    let short_record = development_with_streaks(0, 1);
+    let long_record = development_with_streaks(0, STAR_DENSITY_FULL_WEEKS);
+    for theme in [Theme::Dark, Theme::Light] {
+        for frame_index in [0, 60] {
+            let short_frame =
+                render_galaxy_frame(&short_record, Colorway::Blue, theme, frame_index);
+            let long_frame = render_galaxy_frame(&long_record, Colorway::Blue, theme, frame_index);
+            assert_ne!(short_frame, long_frame);
+            assert!(
+                non_background_pixels(&long_frame, theme.background())
+                    > non_background_pixels(&short_frame, theme.background()),
+                "frame {frame_index} did not gain stars on {theme:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_streak_snapshot_renders_byte_identical_frames() {
+    let development = development_with_streaks(5, TRAIL_FULL_WEEKS);
+    for theme in [Theme::Dark, Theme::Light] {
+        for frame_index in [0, 37] {
+            assert_eq!(
+                render_galaxy_frame(&development, Colorway::Blue, theme, frame_index)
+                    .as_rgba_bytes(),
+                render_galaxy_frame(&development, Colorway::Blue, theme, frame_index)
+                    .as_rgba_bytes()
+            );
+        }
+    }
+}
+
 fn pixel_distance(left: [u8; 4], right: [u8; 4]) -> u32 {
     left.into_iter()
         .zip(right)
@@ -255,6 +323,46 @@ fn opaque_pixels(galaxy_frame: &GalaxyFrame) -> Vec<[u8; 4]> {
             let [red, green, blue, alpha] = channels;
             assert_eq!(*alpha, 255, "galaxy frames are fully opaque");
             [*red, *green, *blue, *alpha]
+        })
+        .collect()
+}
+
+fn non_background_pixels(galaxy_frame: &GalaxyFrame, background: [u8; 4]) -> usize {
+    opaque_pixels(galaxy_frame)
+        .into_iter()
+        .filter(|pixel| *pixel != background)
+        .count()
+}
+
+fn differing_pixels(left: &GalaxyFrame, right: &GalaxyFrame) -> usize {
+    left.as_rgba_bytes()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(right.as_rgba_bytes().as_chunks::<4>().0)
+        .filter(|(left_pixel, right_pixel)| left_pixel != right_pixel)
+        .count()
+}
+
+fn development_with_streaks(current_weeks: usize, longest_weeks: usize) -> GalaxyDevelopment {
+    let mut galaxy_development = development_with_total(MAX_GROWTH_CONTRIBUTIONS);
+    galaxy_development.streaks = StreakDevelopment {
+        longest: streak_weeks(longest_weeks),
+        recent: (current_weeks > 0).then(|| RecentStreak::Current(streak_weeks(current_weeks))),
+    };
+    galaxy_development
+}
+
+fn streak_weeks(week_count: usize) -> Vec<ContributionWeek> {
+    let first_monday: NaiveDate = "2025-01-06".parse().unwrap();
+    (0..week_count)
+        .map(|week_index| ContributionWeek {
+            iso_week: first_monday
+                .checked_add_days(Days::new(week_index as u64 * 7))
+                .unwrap()
+                .iso_week(),
+            active_day_count: 1,
+            observed_day_count: 7,
         })
         .collect()
 }
