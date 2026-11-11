@@ -1,0 +1,20 @@
+[package]
+name = "gitlaxy"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Pixel-art galaxies for a GitHub profile, drawn from public activity."
+repository = "https://github.com/salmonenjoyer68/Gitlaxy"
+documentation = "https://docs.rs/gitlaxy"
+readme = "README.md"
+license = "MIT"
+keywords = ["github", "profile", "galaxy", "pixel-art", "gif"]
+categories = ["command-line-utilities", "visualization"]
+exclude = ["/.github", "/docs"]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+gif = { version = "0.14", default-features = false, features = ["std"] }
+png = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

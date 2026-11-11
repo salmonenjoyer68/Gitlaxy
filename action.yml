@@ -1,0 +1,76 @@
+name: gitlaxy
+description:
+  Draw a GitHub account's galaxy from its public activity as looping GIFs, still PNGs,
+  and a preview, for a profile README.
+branding:
+  icon: star
+  color: blue
+
+inputs:
+  login:
+    description: Account whose galaxy to draw.
+    default: ${{ github.repository_owner }}
+  output-dir:
+    description:
+      Folder, relative to the workspace, that receives galaxy-dark.png,
+      galaxy-light.png, galaxy-dark.gif, galaxy-light.gif, and preview.html.
+    default: galaxy
+  colorway:
+    description: "Galaxy colorway: blue, red, orange, purple, green, or pink."
+    default: blue
+  token:
+    description:
+      Token for reading the account's public data; the built-in token is enough.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Download the gitlaxy release this Action belongs to
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        version=$(grep -m1 '^version' "$GITHUB_ACTION_PATH/Cargo.toml" | cut -d'"' -f2)
+        repository=$(grep -m1 '^repository' "$GITHUB_ACTION_PATH/Cargo.toml" | cut -d'"' -f2)
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) target=x86_64-unknown-linux-musl ;;
+          Linux-ARM64) target=aarch64-unknown-linux-musl ;;
+          macOS-X64) target=x86_64-apple-darwin ;;
+          macOS-ARM64) target=aarch64-apple-darwin ;;
+          *)
+            echo "gitlaxy has no build for $RUNNER_OS $RUNNER_ARCH; use ubuntu-latest" >&2
+            exit 1
+            ;;
+        esac
+        archive="gitlaxy-$version-$target.tar.gz"
+        install_dir="$RUNNER_TEMP/gitlaxy"
+        mkdir -p "$install_dir"
+        if ! gh release download "v$version" --repo "$repository" --dir "$install_dir" \
+            --pattern "$archive" --pattern "$archive.sha256"; then
+          echo "release v$version has no asset $archive; reference the Action at a release tag" >&2
+          exit 1
+        fi
+        cd "$install_dir"
+        if command -v sha256sum > /dev/null; then
+          sha256sum -c "$archive.sha256"
+        else
+          shasum -a 256 -c "$archive.sha256"
+        fi
+        tar -xzf "$archive"
+        echo "$install_dir/gitlaxy-$version-$target" >> "$GITHUB_PATH"
+    - name: Collect the account snapshot
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GALAXY_LOGIN: ${{ inputs.login }}
+      run:
+        gitlaxy collect "$GALAXY_LOGIN" --output "$RUNNER_TEMP/galaxy-snapshot.json"
+    - name: Render the galaxy
+      shell: bash
+      env:
+        GALAXY_OUTPUT_DIR: ${{ inputs.output-dir }}
+        GALAXY_COLORWAY: ${{ inputs.colorway }}
+      run:
+        gitlaxy render "$RUNNER_TEMP/galaxy-snapshot.json" --output-dir
+        "$GALAXY_OUTPUT_DIR" --colorway "$GALAXY_COLORWAY"
