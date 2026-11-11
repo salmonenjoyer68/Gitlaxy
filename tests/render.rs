@@ -33,22 +33,29 @@ fn the_still_is_fully_opaque_on_the_exact_theme_background() {
 }
 
 #[test]
-fn both_themes_draw_a_blue_galaxy_with_no_other_hue() {
+fn the_blue_colorway_stays_dominant_behind_pigment_accents() {
     for theme in [Theme::Dark, Theme::Light] {
         let galaxy_frame = render_galaxy_still(&read_development(), Colorway::Blue, theme);
         let background = theme.background();
         let mut galaxy_colors = BTreeSet::new();
+        let mut blue_pixels = 0;
+        let mut accent_pixels = 0;
         for pixel in opaque_pixels(&galaxy_frame) {
             if pixel == background {
                 continue;
             }
-            assert!(
-                pixel[2] >= pixel[1] && pixel[1] >= pixel[0],
-                "{pixel:?} is not blue"
-            );
-            galaxy_colors.insert(pixel);
+            if pixel[2] >= pixel[1] && pixel[1] >= pixel[0] {
+                blue_pixels += 1;
+                galaxy_colors.insert(pixel);
+            } else {
+                accent_pixels += 1;
+            }
         }
         assert!(galaxy_colors.len() > 10);
+        assert!(
+            blue_pixels > accent_pixels,
+            "the blue ramp covers {blue_pixels} pixels but accents cover {accent_pixels}"
+        );
     }
 }
 

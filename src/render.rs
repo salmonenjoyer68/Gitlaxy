@@ -13,6 +13,7 @@ use std::f64::consts::{PI, TAU};
 use crate::colorway::{Colorway, Palette};
 use crate::galaxy::{GalaxyDevelopment, STAGE_COUNT, calculate_stage};
 use crate::motion;
+use crate::pigment::{Pigment, PigmentShare, pigment_color, pigment_shares, select_pigment};
 use crate::theme::Theme;
 
 /// Width of the native canvas every galaxy is drawn on.
@@ -45,6 +46,24 @@ const CORE_HALO_RADIUS: f64 = 38.0;
 const DISK_FALLOFF_RADIUS: f64 = 42.0;
 const ARM_FALLOFF_RADIUS: f64 = 52.0;
 const STAR_COUNT: usize = 160;
+
+/// Share of stars whose core takes a pigment color; the rest stay in the colorway.
+const PIGMENT_STAR_FRACTION: f64 = 0.42;
+/// A star core carries its pigment only inside this share of its peak brightness.
+const PIGMENT_STAR_CORE_FALLOFF: f64 = 0.32;
+/// Share of disc pixels allowed to take an accent color; the colorway keeps the rest.
+const PIGMENT_PIXEL_SHARE: f64 = 0.3;
+/// Spatial scale of organic arm-accent patches, in disc pixels per noise cell.
+const PIGMENT_ACCENT_SCALE: f64 = 0.09;
+/// Arm brightness below which an accent patch is too faint to tint.
+const PIGMENT_ACCENT_ARM: f64 = 0.07;
+/// Noise above which an arm pixel joins a pigment accent patch.
+const PIGMENT_ACCENT_THRESHOLD: f64 = 0.66;
+/// Seed salts keep pigment decisions independent of the texture and the star field.
+const PIGMENT_ARM_SALT: u64 = 0x5049_474d_454e_5431;
+const PIGMENT_SELECT_SALT: u64 = 0x5049_474d_454e_5432;
+const PIGMENT_STAR_SALT: u64 = 0x5049_474d_454e_5433;
+const PIGMENT_PIXEL_SALT: u64 = 0x5049_474d_454e_5434;
 
 /// A renderer-owned, fixed-size frame with row-major RGBA pixels.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -96,14 +115,24 @@ pub fn render_galaxy_frame(
     let palette = build_palette(colorway.palette(theme));
     let pose = GalaxyPose::at_frame(development.identity_seed, frame_index);
     let stage_scale = stage_scale(calculate_stage(development.total_contributions));
+    let language_pigments = pigment_shares(development);
+    let mut tint = vec![None; PIXEL_COUNT];
     let mut brightness = vec![0.0; PIXEL_COUNT];
-    paint_galaxy(&mut brightness, &pose, stage_scale);
+    paint_galaxy(
+        &mut brightness,
+        &mut tint,
+        &pose,
+        stage_scale,
+        &language_pigments,
+    );
     paint_stars(
         &mut brightness,
+        &mut tint,
         &pose,
         development.identity_seed,
         frame_index,
         stage_scale,
+        &language_pigments,
     );
     let rgba_pixels = brightness
         .into_iter()
@@ -115,7 +144,13 @@ pub fn render_galaxy_frame(
             );
             let position = intensity.clamp(0.0, 1.0) * (PALETTE_LEVELS - 1) as f64;
             let level = (position + threshold).floor() as usize;
-            palette[level.min(PALETTE_LEVELS - 1)]
+            let level = level.min(PALETTE_LEVELS - 1);
+            match tint[pixel_index] {
+                Some(pigment) if level > 0 => {
+                    pigment_color(pigment, theme, level as f64 / (PALETTE_LEVELS - 1) as f64)
+                }
+                _ => palette[level],
+            }
         })
         .collect();
     GalaxyFrame::from_rgba_pixels(rgba_pixels)
@@ -195,7 +230,13 @@ fn stage_scale(stage: u8) -> f64 {
     outer_radius / BASE_OUTER_RADIUS
 }
 
-fn paint_galaxy(brightness: &mut [f64], pose: &GalaxyPose, scale: f64) {
+fn paint_galaxy(
+    brightness: &mut [f64],
+    tint: &mut [Option<Pigment>],
+    pose: &GalaxyPose,
+    scale: f64,
+    pigment_shares: &[PigmentShare],
+) {
     let outer_radius = BASE_OUTER_RADIUS * scale;
     let fade_start = outer_radius * FADE_START_FRACTION;
     for (pixel_index, value) in brightness.iter_mut().enumerate() {
@@ -216,6 +257,28 @@ fn paint_galaxy(brightness: &mut [f64], pose: &GalaxyPose, scale: f64) {
             + 0.06 * value_noise(pose.texture_seed, disc_x * 0.31, disc_y * 0.31, 1);
         let fade = 1.0 - smooth_step(screen_radius, fade_start, outer_radius);
         *value = (core + (disk + arm) * texture) * fade;
+        if !pigment_shares.is_empty() {
+            let accent_coordinate_x = disc_x * PIGMENT_ACCENT_SCALE;
+            let accent_coordinate_y = disc_y * PIGMENT_ACCENT_SCALE;
+            let accent_patch = value_noise(
+                pose.texture_seed,
+                accent_coordinate_x,
+                accent_coordinate_y,
+                PIGMENT_ARM_SALT,
+            );
+            if arm > PIGMENT_ACCENT_ARM
+                && accent_patch > PIGMENT_ACCENT_THRESHOLD
+                && is_pigment_accent_pixel(pose, disc_x, disc_y)
+            {
+                let accent_unit = hash_unit(
+                    pose.texture_seed,
+                    accent_coordinate_x.floor() as i64,
+                    accent_coordinate_y.floor() as i64,
+                    PIGMENT_SELECT_SALT,
+                );
+                tint[pixel_index] = select_pigment(pigment_shares, accent_unit);
+            }
+        }
     }
 }
 
@@ -236,12 +299,15 @@ fn arm_profile(disc_x: f64, disc_y: f64, radius: f64, arm_phase: f64, scale: f64
     gate * (-radius / (ARM_FALLOFF_RADIUS * scale)).exp() * first_arm.max(second_arm)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_stars(
     brightness: &mut [f64],
+    tint: &mut [Option<Pigment>],
     pose: &GalaxyPose,
     identity_seed: u64,
     frame_index: u32,
     scale: f64,
+    pigment_shares: &[PigmentShare],
 ) {
     let star_outer_radius = BASE_OUTER_RADIUS * STAR_OUTER_FRACTION * scale;
     let mut rng = SeededRng::new(pose.texture_seed);
@@ -251,6 +317,17 @@ fn paint_stars(
         let peak = (0.25 + 0.75 * rng.unit().powi(2))
             * motion::twinkle_scale(identity_seed, star_index, frame_index);
         let sigma = 0.55 + 0.55 * rng.unit();
+        let star_pigment = if !pigment_shares.is_empty()
+            && hash_unit(identity_seed, star_index as i64, 0, PIGMENT_STAR_SALT)
+                < PIGMENT_STAR_FRACTION
+        {
+            select_pigment(
+                pigment_shares,
+                hash_unit(identity_seed, star_index as i64, 1, PIGMENT_SELECT_SALT),
+            )
+        } else {
+            None
+        };
         let [screen_x, screen_y] = pose.to_screen(radius * angle.cos(), radius * angle.sin());
         let center_x = CENTER_PIXELS + screen_x;
         let center_y = CENTER_PIXELS + screen_y;
@@ -272,11 +349,32 @@ fn paint_stars(
                 let falloff = (-(distance_x * distance_x + distance_y * distance_y)
                     / (2.0 * sigma * sigma))
                     .exp();
-                brightness[pixel_y as usize * FRAME_WIDTH_PIXELS as usize + pixel_x as usize] +=
-                    peak * falloff;
+                let pixel_index = pixel_y as usize * FRAME_WIDTH_PIXELS as usize + pixel_x as usize;
+                brightness[pixel_index] += peak * falloff;
+                if let Some(pigment) = star_pigment
+                    && falloff > PIGMENT_STAR_CORE_FALLOFF
+                {
+                    let [disc_x, disc_y] = pose.to_disc(
+                        pixel_x as f64 - CENTER_PIXELS,
+                        pixel_y as f64 - CENTER_PIXELS,
+                    );
+                    if is_pigment_accent_pixel(pose, disc_x, disc_y) {
+                        tint[pixel_index] = Some(pigment);
+                    }
+                }
             }
         }
     }
+}
+
+/// Whether one disc pixel may take a pigment accent; the rest keep the colorway.
+fn is_pigment_accent_pixel(pose: &GalaxyPose, disc_x: f64, disc_y: f64) -> bool {
+    hash_unit(
+        pose.texture_seed,
+        disc_x.floor() as i64,
+        disc_y.floor() as i64,
+        PIGMENT_PIXEL_SALT,
+    ) < PIGMENT_PIXEL_SHARE
 }
 
 fn wrap_angle(angle: f64) -> f64 {
