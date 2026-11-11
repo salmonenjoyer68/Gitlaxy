@@ -129,19 +129,19 @@ fn the_last_stage_fills_about_eighty_five_percent_of_the_canvas() {
 #[test]
 fn increasing_totals_grow_the_galaxy_through_every_stage() {
     let totals = [0, 179, 996, 4_734, MAX_GROWTH_CONTRIBUTIONS];
-    let mut previous_width = 0;
+    let mut previous_extent = 0;
     for (stage_index, total) in totals.into_iter().enumerate() {
         let galaxy_development = development_with_total(total);
         assert_eq!(calculate_stage(total), stage_index as u8 + 1);
         let galaxy_frame = render_galaxy_still(&galaxy_development, Theme::Dark);
-        let (left, _, right, _) = opaque_bounds(&galaxy_frame, Theme::Dark.background());
-        let width = right - left + 1;
+        let (left, top, right, bottom) = opaque_bounds(&galaxy_frame, Theme::Dark.background());
+        let extent = (right - left + 1).max(bottom - top + 1);
         assert!(
-            width > previous_width,
-            "stage {} is {width} pixels wide, no wider than the previous {previous_width}",
+            extent > previous_extent,
+            "stage {} spans {extent} pixels, no more than the previous {previous_extent}",
             stage_index + 1
         );
-        previous_width = width;
+        previous_extent = extent;
     }
 }
 
