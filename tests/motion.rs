@@ -6,6 +6,7 @@ use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::{GalaxyDevelopment, MAX_GROWTH_CONTRIBUTIONS, derive_galaxy_development};
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::motion::{frame_rotation, twinkle_scale};
+use gitlaxy::motion_state::MotionState;
 use gitlaxy::render::{
     FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, GalaxyFrame, LOOP_FRAME_COUNT, render_galaxy_frame,
     render_galaxy_still,
@@ -46,8 +47,14 @@ fn the_analytic_next_frame_wraps_to_the_first() {
         frame_rotation(0).to_bits()
     );
     assert_eq!(
-        twinkle_scale(galaxy_development.identity_seed, 0, LOOP_FRAME_COUNT).to_bits(),
-        twinkle_scale(galaxy_development.identity_seed, 0, 0).to_bits()
+        twinkle_scale(
+            galaxy_development.identity_seed,
+            0,
+            LOOP_FRAME_COUNT,
+            MotionState::Active
+        )
+        .to_bits(),
+        twinkle_scale(galaxy_development.identity_seed, 0, 0, MotionState::Active).to_bits()
     );
 }
 
@@ -140,7 +147,7 @@ fn twinkle_varies_and_returns_without_moving_stars() {
     let galaxy_development = read_development();
     let identity_seed = galaxy_development.identity_seed;
     let brightnesses: Vec<f64> = (0..=LOOP_FRAME_COUNT)
-        .map(|frame_index| twinkle_scale(identity_seed, 7, frame_index))
+        .map(|frame_index| twinkle_scale(identity_seed, 7, frame_index, MotionState::Active))
         .collect();
     let darkest = brightnesses.iter().copied().fold(f64::INFINITY, f64::min);
     let brightest = brightnesses
@@ -181,6 +188,8 @@ fn read_development() -> GalaxyDevelopment {
     let mut galaxy_development = derive_galaxy_development(&account_snapshot).unwrap();
     // The fixture's own total is stage one; the loop tests need a full spiral.
     galaxy_development.total_contributions = MAX_GROWTH_CONTRIBUTIONS;
+    // Loop tests measure the active loop; the quiet state is covered separately.
+    galaxy_development.recent_activity.quiet_day_count = 0;
     galaxy_development
 }
 
