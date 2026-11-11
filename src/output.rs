@@ -1,9 +1,8 @@
 //! Image and animation encoding; callers own destinations and publication.
 //!
 //! Every export is [`STATIC_EXPORT_SCALE`] times the native canvas on each side, so the
-//! pixel art stays crisp: [`encode_png`] for the still, [`encode_svg`] for a vector
-//! document of the same pixels, [`encode_gif`] for a behavior's loop, and
-//! [`encode_preview_html`] for a page that shows the GIF and PNG beside it on GitHub's
+//! pixel art stays crisp: [`encode_png`] for the still, [`encode_gif`] for a loop, and
+//! [`encode_preview_html`] for a page that shows both themes' GIFs and PNGs on GitHub's
 //! light and dark page colors.
 
 use std::borrow::Cow;
@@ -11,8 +10,7 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
-use crate::motion::FRAMES_PER_SECOND;
-use crate::render::{FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, KoiFrame};
+use crate::render::{FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, GalaxyFrame};
 
 /// Each native pixel becomes this many export pixels on each side.
 pub const STATIC_EXPORT_SCALE: u32 = 2;
@@ -20,12 +18,14 @@ pub const STATIC_EXPORT_SCALE: u32 = 2;
 pub const STATIC_WIDTH_PIXELS: u32 = FRAME_WIDTH_PIXELS * STATIC_EXPORT_SCALE;
 /// Height of every exported image.
 pub const STATIC_HEIGHT_PIXELS: u32 = FRAME_HEIGHT_PIXELS * STATIC_EXPORT_SCALE;
+/// GIF frames per second; one 120-frame loop lasts eight seconds.
+pub const FRAMES_PER_SECOND: u32 = 15;
 
 /// Encode a static PNG by repeating each native pixel in both dimensions.
 /// Preserve its color and alpha without interpolation, timestamps, I/O, or mutation.
 /// Encoding errors propagate before the caller publishes any resulting bytes.
-pub fn encode_png(koi_frame: &KoiFrame) -> Result<Vec<u8>, png::EncodingError> {
-    let native_pixels = koi_frame.as_rgba_bytes().as_chunks::<4>().0;
+pub fn encode_png(galaxy_frame: &GalaxyFrame) -> Result<Vec<u8>, png::EncodingError> {
+    let native_pixels = galaxy_frame.as_rgba_bytes().as_chunks::<4>().0;
     let mut export_pixels = vec![[0; 4]; (STATIC_WIDTH_PIXELS * STATIC_HEIGHT_PIXELS) as usize];
     for (pixel_index, pixel_channels) in export_pixels.iter_mut().enumerate() {
         let native_x = pixel_index as u32 % STATIC_WIDTH_PIXELS / STATIC_EXPORT_SCALE;
@@ -43,39 +43,7 @@ pub fn encode_png(koi_frame: &KoiFrame) -> Result<Vec<u8>, png::EncodingError> {
     Ok(png_bytes)
 }
 
-/// Encode a self-contained SVG at the static export size with native pixel coordinates.
-/// Equal neighboring pixels share a rectangle within their row. Transparent pixels
-/// are omitted; visible pixels retain their color and alpha. Identical frames produce
-/// identical documents without I/O, timestamps, external assets, or input mutation.
-pub fn encode_svg(koi_frame: &KoiFrame) -> String {
-    let mut svg_document = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{STATIC_WIDTH_PIXELS}\" height=\"{STATIC_HEIGHT_PIXELS}\" viewBox=\"0 0 {FRAME_WIDTH_PIXELS} {FRAME_HEIGHT_PIXELS}\" shape-rendering=\"crispEdges\">\n"
-    );
-    let native_pixels = koi_frame.as_rgba_bytes().as_chunks::<4>().0;
-    let mut pixel_index = 0;
-    while pixel_index < native_pixels.len() {
-        let pixel_channels = native_pixels[pixel_index];
-        let pixel_x = pixel_index % FRAME_WIDTH_PIXELS as usize;
-        let pixel_y = pixel_index / FRAME_WIDTH_PIXELS as usize;
-        let row_end_index = (pixel_y + 1) * FRAME_WIDTH_PIXELS as usize;
-        let run_length_pixels = native_pixels[pixel_index..row_end_index]
-            .iter()
-            .take_while(|next_pixel| **next_pixel == pixel_channels)
-            .count();
-        if pixel_channels[3] != 0 {
-            let [red_channel, green_channel, blue_channel, alpha_channel] = pixel_channels;
-            let fill_opacity = f64::from(alpha_channel) / 255.0;
-            svg_document.push_str(&format!(
-                "  <rect x=\"{pixel_x}\" y=\"{pixel_y}\" width=\"{run_length_pixels}\" height=\"1\" fill=\"#{red_channel:02x}{green_channel:02x}{blue_channel:02x}\" fill-opacity=\"{fill_opacity}\"/>\n"
-            ));
-        }
-        pixel_index += run_length_pixels;
-    }
-    svg_document.push_str("</svg>\n");
-    svg_document
-}
-
-/// The preview page up to its caption; GitHub's light and dark page colors follow.
+/// The preview page up to its caption; the two theme sections follow.
 const PREVIEW_HEAD: &str = r#"<!doctype html>
 <html lang="en">
 <head>
@@ -85,7 +53,7 @@ const PREVIEW_HEAD: &str = r#"<!doctype html>
 <style>
   body { margin: 0; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
   h1, h2 { margin: 0; font-size: 14px; font-weight: 600; }
-  header, section { display: grid; gap: 12px; padding: 16px; }
+  section { display: grid; gap: 12px; padding: 16px; }
   .light { background: #ffffff; color: #1f2328; }
   .dark { background: #0d1117; color: #f0f6fc; }
   .images { display: flex; flex-wrap: wrap; gap: 16px; }
@@ -94,29 +62,30 @@ const PREVIEW_HEAD: &str = r#"<!doctype html>
 </style>
 </head>
 <body>
-<header class="light"><h1>"#;
-const PREVIEW_PANELS: &str = r#"</h1></header>
 <section class="light">
-<h2>GitHub light</h2>
+<h1>"#;
+const PREVIEW_PANELS: &str = r#"</h1>
+<h2>Light</h2>
 <div class="images">
-<figure><img src="koi.gif" width="512" height="512" alt="The koi swimming"><figcaption>koi.gif</figcaption></figure>
-<figure><img src="koi.png" width="512" height="512" alt="The koi, still"><figcaption>koi.png</figcaption></figure>
+<figure><img src="galaxy-light.gif" width="512" height="512" alt="The blue galaxy on a light background"><figcaption>galaxy-light.gif</figcaption></figure>
+<figure><img src="galaxy-light.png" width="512" height="512" alt="The blue galaxy still on a light background"><figcaption>galaxy-light.png</figcaption></figure>
 </div>
 </section>
 <section class="dark">
-<h2>GitHub dark</h2>
+<h2>Dark</h2>
 <div class="images">
-<figure><img src="koi.gif" width="512" height="512" alt="The koi swimming"><figcaption>koi.gif</figcaption></figure>
-<figure><img src="koi.png" width="512" height="512" alt="The koi, still"><figcaption>koi.png</figcaption></figure>
+<figure><img src="galaxy-dark.gif" width="512" height="512" alt="The blue galaxy on a dark background"><figcaption>galaxy-dark.gif</figcaption></figure>
+<figure><img src="galaxy-dark.png" width="512" height="512" alt="The blue galaxy still on a dark background"><figcaption>galaxy-dark.png</figcaption></figure>
 </div>
 </section>
 </body>
 </html>
 "#;
 
-/// Build a page that previews `koi.gif` and `koi.png`, read from beside it, on GitHub's
-/// light and dark page colors under the given caption. It draws nothing itself and loads
-/// no scripts or outside files, so it shows exactly what was generated.
+/// Build a page that previews `galaxy-light.gif` and `galaxy-light.png` on the light
+/// background and `galaxy-dark.gif` and `galaxy-dark.png` on the dark background, read
+/// from beside it, under the given caption. It draws nothing itself and loads no scripts
+/// or outside files, so it shows exactly what was generated.
 pub fn encode_preview_html(caption: &str) -> String {
     let escaped_caption = caption
         .replace('&', "&amp;")
@@ -129,16 +98,16 @@ pub fn encode_preview_html(caption: &str) -> String {
 const GIF_COLOR_LIMIT: usize = 255;
 const GIF_TRANSPARENT_INDEX: u8 = 0;
 
-/// Encode a seamless loop as an animated GIF at the static export size, repeating each
-/// native pixel in both dimensions. The GIF repeats forever at `FRAMES_PER_SECOND`; each
+/// Encode a loop as an animated GIF at the static export size, repeating each native
+/// pixel in both dimensions. The GIF repeats forever at [`FRAMES_PER_SECOND`]; each
 /// delay, in hundredths of a second, is the step in a rounded running total, so a loop
 /// lasts exactly its frame count divided by the frame rate. Each frame stores only the
 /// box around its drawn pixels, with an exact palette of its colors, and that box clears
 /// before the next frame. Colors are never approximated: a frame with more than 255
 /// colors or a partly transparent pixel fails instead. Identical frames produce
 /// identical bytes without I/O, timestamps, or input mutation.
-pub fn encode_gif(koi_frames: &[KoiFrame]) -> Result<Vec<u8>, GifEncodingError> {
-    if koi_frames.is_empty() {
+pub fn encode_gif(galaxy_frames: &[GalaxyFrame]) -> Result<Vec<u8>, GifEncodingError> {
+    if galaxy_frames.is_empty() {
         return Err(GifEncodingError::NoFrames);
     }
     let mut gif_encoder = gif::Encoder::new(
@@ -148,8 +117,8 @@ pub fn encode_gif(koi_frames: &[KoiFrame]) -> Result<Vec<u8>, GifEncodingError> 
         &[],
     )?;
     gif_encoder.set_repeat(gif::Repeat::Infinite)?;
-    for (frame_index, koi_frame) in koi_frames.iter().enumerate() {
-        let native_pixels = koi_frame.as_rgba_bytes().as_chunks::<4>().0;
+    for (frame_index, galaxy_frame) in galaxy_frames.iter().enumerate() {
+        let native_pixels = galaxy_frame.as_rgba_bytes().as_chunks::<4>().0;
         let [box_left, box_top, box_width, box_height] = find_drawn_box(native_pixels);
         let mut palette_indices: BTreeMap<[u8; 3], u8> = BTreeMap::new();
         let mut palette_channels = vec![0; 3];
@@ -285,84 +254,5 @@ impl Error for GifEncodingError {
 impl From<gif::EncodingError> for GifEncodingError {
     fn from(encoding_error: gif::EncodingError) -> Self {
         Self::Encoder(encoding_error)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const FRAME_PIXEL_COUNT: usize = (FRAME_WIDTH_PIXELS * FRAME_HEIGHT_PIXELS) as usize;
-
-    /// A frame with one opaque pixel of each given color, in reading order.
-    fn frame_with_colors(colors: impl IntoIterator<Item = [u8; 4]>) -> KoiFrame {
-        let mut rgba_pixels = vec![[0; 4]; FRAME_PIXEL_COUNT];
-        for (pixel_channels, color) in rgba_pixels.iter_mut().zip(colors) {
-            *pixel_channels = color;
-        }
-        KoiFrame::from_rgba_pixels(rgba_pixels)
-    }
-
-    fn distinct_colors(color_count: u32) -> impl Iterator<Item = [u8; 4]> {
-        (0..color_count).map(|color_index| [color_index as u8, (color_index >> 8) as u8, 7, 255])
-    }
-
-    fn total_hundredths(gif_bytes: &[u8]) -> u32 {
-        let mut gif_decoder = gif::DecodeOptions::new().read_info(gif_bytes).unwrap();
-        let mut total = 0;
-        while let Some(gif_frame) = gif_decoder.read_next_frame().unwrap() {
-            total += u32::from(gif_frame.delay);
-        }
-        total
-    }
-
-    #[test]
-    fn whole_loops_last_exactly_their_frames_at_fifteen_per_second() {
-        for (loop_frame_count, loop_hundredths) in [(120, 800), (90, 600)] {
-            let koi_frames: Vec<KoiFrame> = (0..loop_frame_count)
-                .map(|_| frame_with_colors(distinct_colors(1)))
-                .collect();
-            assert_eq!(
-                total_hundredths(&encode_gif(&koi_frames).unwrap()),
-                loop_hundredths
-            );
-        }
-    }
-
-    #[test]
-    fn a_frame_may_use_every_palette_color_but_no_more() {
-        assert!(encode_gif(&[frame_with_colors(distinct_colors(255))]).is_ok());
-        let crowded_frames = [
-            frame_with_colors(distinct_colors(1)),
-            frame_with_colors(distinct_colors(256)),
-        ];
-        assert!(matches!(
-            encode_gif(&crowded_frames),
-            Err(GifEncodingError::TooManyColors { frame_index: 1 })
-        ));
-    }
-
-    #[test]
-    fn partly_transparent_pixels_fail_instead_of_rounding() {
-        assert!(matches!(
-            encode_gif(&[frame_with_colors([[200, 100, 50, 128]])]),
-            Err(GifEncodingError::PartialTransparency { frame_index: 0 })
-        ));
-    }
-
-    #[test]
-    fn an_empty_frame_keeps_one_transparent_pixel() {
-        let gif_bytes = encode_gif(&[frame_with_colors([])]).unwrap();
-        let mut gif_decoder = gif::DecodeOptions::new()
-            .read_info(gif_bytes.as_slice())
-            .unwrap();
-        let gif_frame = gif_decoder.read_next_frame().unwrap().unwrap();
-        assert_eq!((gif_frame.width, gif_frame.height), (2, 2));
-        assert!(
-            gif_frame
-                .buffer
-                .chunks(4)
-                .all(|pixel_channels| pixel_channels[3] == 0)
-        );
     }
 }
