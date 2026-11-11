@@ -25,5 +25,6 @@ pub mod markings;
 pub mod motion;
 pub mod motion_state;
 pub mod output;
+pub mod pigment;
 pub mod render;
 pub mod theme;
