@@ -4,16 +4,16 @@ use std::fs;
 use std::process::Command;
 
 use chrono::{Datelike, Days, NaiveDate, Weekday};
-use gitlaxy::coat::KoiBody;
 use gitlaxy::collect::{CollectionError, GraphqlClient, collect_account_snapshot};
+use gitlaxy::galaxy::derive_galaxy_development;
 use gitlaxy::history::{
     ContributionHistoryError, LanguageColor, calculate_language_shares, summarize_contributions,
 };
-use gitlaxy::koi::derive_koi_development;
-use gitlaxy::render::render_koi;
+use gitlaxy::render::render_galaxy_still;
+use gitlaxy::theme::Theme;
 use serde_json::{Value, json};
 
-const LOGIN: &str = "synthetic-koi";
+const LOGIN: &str = "synthetic-galaxy";
 
 #[test]
 fn collected_snapshot_covers_every_page_and_day_and_renders() {
@@ -44,15 +44,15 @@ fn collected_snapshot_covers_every_page_and_day_and_renders() {
         .sum();
     assert_eq!(contribution_summary.total_contributions, expected_total);
 
-    let koi_frame = render_koi(
-        &derive_koi_development(&account_snapshot).unwrap(),
-        KoiBody::default(),
+    let galaxy_frame = render_galaxy_still(
+        &derive_galaxy_development(&account_snapshot).unwrap(),
+        Theme::Dark,
     );
     assert!(
-        koi_frame
+        galaxy_frame
             .as_rgba_bytes()
             .chunks(4)
-            .any(|pixel| pixel[3] != 0)
+            .all(|pixel| pixel[3] == 255)
     );
 }
 

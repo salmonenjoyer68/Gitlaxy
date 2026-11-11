@@ -1,23 +1,20 @@
 name: gitlaxy
 description:
-  Draw a GitHub account's koi from its public activity as a looping GIF, a still
-  PNG, and a preview, for a profile README.
+  Draw a GitHub account's blue galaxy from its public activity as looping GIFs, still
+  PNGs, and a preview, for a profile README.
 branding:
-  icon: droplet
+  icon: star
   color: blue
 
 inputs:
   login:
-    description: Account whose koi to draw.
+    description: Account whose galaxy to draw.
     default: ${{ github.repository_owner }}
-  body:
-    description: Body color, one of white, black, asagi, tea, gold, or platinum.
-    default: white
   output-dir:
     description:
-      Folder, relative to the workspace, that receives koi.gif, koi.png, and
-      preview.html.
-    default: koi
+      Folder, relative to the workspace, that receives galaxy-dark.png,
+      galaxy-light.png, galaxy-dark.gif, galaxy-light.gif, and preview.html.
+    default: galaxy
   token:
     description:
       Token for reading the account's public data; the built-in token is enough.
@@ -63,14 +60,13 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
-        KOI_LOGIN: ${{ inputs.login }}
+        GALAXY_LOGIN: ${{ inputs.login }}
       run:
-        gitlaxy collect "$KOI_LOGIN" --output "$RUNNER_TEMP/koi-snapshot.json"
-    - name: Render the koi
+        gitlaxy collect "$GALAXY_LOGIN" --output "$RUNNER_TEMP/galaxy-snapshot.json"
+    - name: Render the galaxy
       shell: bash
       env:
-        KOI_BODY: ${{ inputs.body }}
-        KOI_OUTPUT_DIR: ${{ inputs.output-dir }}
+        GALAXY_OUTPUT_DIR: ${{ inputs.output-dir }}
       run:
-        gitlaxy render "$RUNNER_TEMP/koi-snapshot.json" --output-dir
-        "$KOI_OUTPUT_DIR" --body "$KOI_BODY"
+        gitlaxy render "$RUNNER_TEMP/galaxy-snapshot.json" --output-dir
+        "$GALAXY_OUTPUT_DIR"

@@ -1,44 +1,33 @@
+use std::collections::BTreeSet;
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use chrono::Days;
-use gitlaxy::behavior::{Behavior, select_behavior};
-use gitlaxy::coat::KoiBody;
-use gitlaxy::history::{AccountSnapshot, ContributionDay};
-use gitlaxy::koi::{KoiDevelopment, derive_koi_development};
-use gitlaxy::motion::frame_count;
-use gitlaxy::output::{encode_gif, encode_png};
-use gitlaxy::render::{KoiFrame, render_koi, render_swim_frame};
+use gitlaxy::galaxy::derive_galaxy_development;
+use gitlaxy::history::AccountSnapshot;
+use gitlaxy::output::{STATIC_HEIGHT_PIXELS, STATIC_WIDTH_PIXELS, encode_gif, encode_png};
+use gitlaxy::render::{LOOP_FRAME_COUNT, render_galaxy_still};
+use gitlaxy::theme::Theme;
 
 const HISTORY_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/account-with-history.json"
 );
+const OUTPUT_FILE_NAMES: [&str; 5] = [
+    "galaxy-dark.png",
+    "galaxy-light.png",
+    "galaxy-dark.gif",
+    "galaxy-light.gif",
+    "preview.html",
+];
 
 #[test]
-fn render_writes_the_days_loop_still_and_preview_as_the_renderer_draws_them() {
-    // Two quiet weeks make the koi rest, so the loop can't pass as the fallback cruise.
-    let mut account_snapshot = read_fixture_snapshot();
-    let contribution_history = account_snapshot.contribution_history.as_mut().unwrap();
-    for day_offset in 1..=14 {
-        contribution_history.days.push(ContributionDay {
-            date: contribution_history.observed_on + Days::new(day_offset),
-            contribution_count: 0,
-        });
-    }
-    contribution_history.observed_on = contribution_history.days.last().unwrap().date;
-    let scratch_directory = fresh_directory("render-default");
-    let snapshot_path = scratch_directory.join("snapshot.json");
-    fs::write(
-        &snapshot_path,
-        serde_json::to_string(&account_snapshot).unwrap(),
-    )
-    .unwrap();
-    let output_directory = scratch_directory.join("koi");
+fn render_writes_the_five_galaxy_files_as_the_renderer_draws_them() {
+    let output_directory = fresh_directory("render-files");
     let command_output = run_gitlaxy(&[
         "render",
-        snapshot_path.to_str().unwrap(),
+        HISTORY_FIXTURE,
         "--output-dir",
         output_directory.to_str().unwrap(),
     ]);
@@ -48,62 +37,139 @@ fn render_writes_the_days_loop_still_and_preview_as_the_renderer_draws_them() {
         "{}",
         String::from_utf8_lossy(&command_output.stderr)
     );
-
-    let koi_development = derive_koi_development(&account_snapshot).unwrap();
-    let behavior = select_behavior(&koi_development);
-    assert_eq!(behavior, Behavior::Rest);
-    let swim_frames: Vec<KoiFrame> = (0..frame_count(behavior))
-        .map(|frame_index| {
-            render_swim_frame(&koi_development, KoiBody::White, behavior, frame_index)
-        })
+    let written_names: BTreeSet<String> = fs::read_dir(&output_directory)
+        .unwrap()
+        .map(|directory_entry| directory_entry.unwrap().file_name().into_string().unwrap())
         .collect();
     assert_eq!(
-        fs::read(output_directory.join("koi.gif")).unwrap(),
-        encode_gif(&swim_frames).unwrap()
+        written_names,
+        OUTPUT_FILE_NAMES.map(str::to_owned).into_iter().collect()
     );
-    assert_eq!(
-        fs::read(output_directory.join("koi.png")).unwrap(),
-        encode_png(&render_koi(&koi_development, KoiBody::White)).unwrap()
-    );
+
+    let galaxy_development = read_fixture_development();
+    for (theme, file_stem) in [(Theme::Dark, "galaxy-dark"), (Theme::Light, "galaxy-light")] {
+        let still_frame = render_galaxy_still(&galaxy_development, theme);
+        assert_eq!(
+            fs::read(output_directory.join(format!("{file_stem}.png"))).unwrap(),
+            encode_png(&still_frame).unwrap()
+        );
+        assert_eq!(
+            fs::read(output_directory.join(format!("{file_stem}.gif"))).unwrap(),
+            encode_gif(&vec![still_frame; LOOP_FRAME_COUNT as usize]).unwrap()
+        );
+    }
     let preview_html = fs::read_to_string(output_directory.join("preview.html")).unwrap();
-    assert!(preview_html.contains(r#"src="koi.gif""#));
-    assert!(preview_html.contains(r#"src="koi.png""#));
-    assert!(!preview_html.contains("<script"));
-    let summary_line = String::from_utf8_lossy(&command_output.stdout);
-    let observation_date = koi_development.observed_on.to_string();
-    assert!(summary_line.contains(&observation_date));
+    let observation_date = galaxy_development.observed_on.to_string();
     assert!(preview_html.contains(&observation_date));
+    let summary_line = String::from_utf8_lossy(&command_output.stdout);
+    assert!(summary_line.contains(&observation_date));
+    assert!(summary_line.contains("stage 3"));
 }
 
 #[test]
-fn the_body_option_redraws_the_koi_in_that_body() {
-    let output_directory = fresh_directory("render-black");
+fn both_themes_are_512_square_on_their_exact_opaque_background() {
+    let output_directory = fresh_directory("render-themes");
     let command_output = run_gitlaxy(&[
         "render",
         HISTORY_FIXTURE,
         "--output-dir",
         output_directory.to_str().unwrap(),
-        "--body",
-        "black",
     ]);
     assert_eq!(command_output.status.code(), Some(0));
-    let koi_development = read_fixture_development();
-    let black_png = encode_png(&render_koi(&koi_development, KoiBody::Black)).unwrap();
-    assert_ne!(
-        black_png,
-        encode_png(&render_koi(&koi_development, KoiBody::White)).unwrap()
-    );
-    assert_eq!(
-        fs::read(output_directory.join("koi.png")).unwrap(),
-        black_png
-    );
-    assert!(String::from_utf8_lossy(&command_output.stdout).contains("black body"));
+    for theme in [Theme::Dark, Theme::Light] {
+        let file_stem = format!("galaxy-{}", theme.name());
+        let png_pixels =
+            decode_png(&fs::read(output_directory.join(format!("{file_stem}.png"))).unwrap());
+        assert_eq!(
+            png_pixels.len(),
+            (STATIC_WIDTH_PIXELS * STATIC_HEIGHT_PIXELS) as usize
+        );
+        assert_eq!(png_pixels[0], theme.background());
+        assert!(png_pixels.iter().all(|pixel| pixel[3] == 255));
+        assert!(png_pixels.iter().any(|pixel| *pixel != theme.background()));
+
+        let gif_bytes = fs::read(output_directory.join(format!("{file_stem}.gif"))).unwrap();
+        let mut gif_decoder = gif::DecodeOptions::new()
+            .read_info(gif_bytes.as_slice())
+            .unwrap();
+        assert_eq!(
+            (
+                u32::from(gif_decoder.width()),
+                u32::from(gif_decoder.height())
+            ),
+            (STATIC_WIDTH_PIXELS, STATIC_HEIGHT_PIXELS)
+        );
+        assert_eq!(gif_decoder.repeat(), gif::Repeat::Infinite);
+        let mut frame_count = 0;
+        let mut total_hundredths = 0;
+        while let Some(gif_frame) = gif_decoder.read_next_frame().unwrap() {
+            frame_count += 1;
+            total_hundredths += u32::from(gif_frame.delay);
+            assert_eq!(
+                (u32::from(gif_frame.width), u32::from(gif_frame.height)),
+                (STATIC_WIDTH_PIXELS, STATIC_HEIGHT_PIXELS)
+            );
+        }
+        assert_eq!(frame_count, LOOP_FRAME_COUNT as usize);
+        assert_eq!(total_hundredths, 800);
+    }
+}
+
+#[test]
+fn the_preview_shows_one_light_and_one_dark_pair_without_scripts() {
+    let output_directory = fresh_directory("render-preview");
+    let command_output = run_gitlaxy(&[
+        "render",
+        HISTORY_FIXTURE,
+        "--output-dir",
+        output_directory.to_str().unwrap(),
+    ]);
+    assert_eq!(command_output.status.code(), Some(0));
+    let preview_html = fs::read_to_string(output_directory.join("preview.html")).unwrap();
+    assert_eq!(preview_html.matches("<section").count(), 2);
+    assert!(!preview_html.contains("<script"));
+    assert!(!preview_html.contains("http://"));
+    assert!(!preview_html.contains("https://"));
+    assert!(preview_html.contains("#ffffff"));
+    assert!(preview_html.contains("#0d1117"));
+    let dark_start = preview_html.find("class=\"dark\"").unwrap();
+    let light_section = &preview_html[..dark_start];
+    let dark_section = &preview_html[dark_start..];
+    assert!(light_section.contains("galaxy-light.gif"));
+    assert!(light_section.contains("galaxy-light.png"));
+    assert!(!light_section.contains("galaxy-dark."));
+    assert!(dark_section.contains("galaxy-dark.gif"));
+    assert!(dark_section.contains("galaxy-dark.png"));
+    assert!(!dark_section.contains("galaxy-light."));
+    assert!(preview_html.contains(&read_fixture_development().observed_on.to_string()));
+}
+
+#[test]
+fn repeated_runs_write_byte_identical_files() {
+    let first_directory = fresh_directory("render-repeat-first");
+    let second_directory = fresh_directory("render-repeat-second");
+    for output_directory in [&first_directory, &second_directory] {
+        let command_output = run_gitlaxy(&[
+            "render",
+            HISTORY_FIXTURE,
+            "--output-dir",
+            output_directory.to_str().unwrap(),
+        ]);
+        assert_eq!(command_output.status.code(), Some(0));
+    }
+    for file_name in OUTPUT_FILE_NAMES {
+        assert_eq!(
+            fs::read(first_directory.join(file_name)).unwrap(),
+            fs::read(second_directory.join(file_name)).unwrap(),
+            "{file_name} changed between runs"
+        );
+    }
 }
 
 #[test]
 fn a_failed_render_exits_one_and_keeps_the_previous_files() {
     let output_directory = fresh_directory("render-failure");
-    for file_name in ["koi.gif", "koi.png", "preview.html"] {
+    for file_name in OUTPUT_FILE_NAMES {
         fs::write(
             output_directory.join(file_name),
             format!("previous {file_name}"),
@@ -118,27 +184,28 @@ fn a_failed_render_exits_one_and_keeps_the_previous_files() {
     ]);
     assert_eq!(command_output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&command_output.stderr).starts_with("gitlaxy: "));
-    for file_name in ["koi.gif", "koi.png", "preview.html"] {
+    for file_name in OUTPUT_FILE_NAMES {
         assert_eq!(
             fs::read_to_string(output_directory.join(file_name)).unwrap(),
             format!("previous {file_name}")
         );
     }
-    assert_eq!(fs::read_dir(&output_directory).unwrap().count(), 3);
+    assert_eq!(fs::read_dir(&output_directory).unwrap().count(), 5);
 }
 
 #[test]
 fn render_usage_errors_exit_two_and_help_exits_zero() {
     for invalid_arguments in [
-        &["render", HISTORY_FIXTURE][..],
-        &["render", "--output-dir", "koi"],
+        &["render"][..],
+        &["render", "--output-dir", "galaxy"],
+        &["render", HISTORY_FIXTURE],
         &[
             "render",
             HISTORY_FIXTURE,
             "--output-dir",
-            "koi",
+            "galaxy",
             "--body",
-            "red",
+            "black",
         ],
     ] {
         let command_output = run_gitlaxy(invalid_arguments);
@@ -151,7 +218,10 @@ fn render_usage_errors_exit_two_and_help_exits_zero() {
     }
     let help_output = run_gitlaxy(&["render", "--help"]);
     assert_eq!(help_output.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&help_output.stdout).contains("platinum"));
+    let help_text = String::from_utf8_lossy(&help_output.stdout);
+    assert!(help_text.contains("render SNAPSHOT"));
+    assert!(help_text.contains("galaxy-dark.png"));
+    assert!(!help_text.contains("koi"));
 }
 
 #[test]
@@ -164,12 +234,26 @@ fn version_prints_the_manifest_version_and_exits_zero() {
     );
 }
 
-fn read_fixture_snapshot() -> AccountSnapshot {
-    serde_json::from_str(&fs::read_to_string(HISTORY_FIXTURE).unwrap()).unwrap()
+fn read_fixture_development() -> gitlaxy::galaxy::GalaxyDevelopment {
+    let account_snapshot: AccountSnapshot =
+        serde_json::from_str(&fs::read_to_string(HISTORY_FIXTURE).unwrap()).unwrap();
+    derive_galaxy_development(&account_snapshot).unwrap()
 }
 
-fn read_fixture_development() -> KoiDevelopment {
-    derive_koi_development(&read_fixture_snapshot()).unwrap()
+/// Decode a PNG into row-major RGBA pixels.
+fn decode_png(png_bytes: &[u8]) -> Vec<[u8; 4]> {
+    let mut png_reader = png::Decoder::new(Cursor::new(png_bytes))
+        .read_info()
+        .unwrap();
+    let mut png_buffer = vec![0; png_reader.output_buffer_size().unwrap()];
+    let png_info = png_reader.next_frame(&mut png_buffer).unwrap();
+    assert_eq!(
+        (png_info.width, png_info.height),
+        (STATIC_WIDTH_PIXELS, STATIC_HEIGHT_PIXELS)
+    );
+    assert_eq!(png_info.color_type, png::ColorType::Rgba);
+    png_buffer.truncate(png_info.buffer_size());
+    png_buffer.as_chunks::<4>().0.to_vec()
 }
 
 /// An empty directory of the given name under Cargo's scratch space for tests.
