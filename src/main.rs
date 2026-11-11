@@ -7,10 +7,10 @@ use std::{env, fs};
 
 use chrono::{DateTime, NaiveDate};
 use gitlaxy::collect::{GhCli, collect_account_snapshot};
-use gitlaxy::galaxy::{GalaxyDevelopment, derive_galaxy_development};
+use gitlaxy::galaxy::{GalaxyDevelopment, calculate_stage, derive_galaxy_development};
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::output::{encode_gif, encode_png, encode_preview_html};
-use gitlaxy::render::{GalaxyFrame, LOOP_FRAME_COUNT, STILL_STAGE, render_galaxy_frame};
+use gitlaxy::render::{GalaxyFrame, LOOP_FRAME_COUNT, render_galaxy_frame};
 use gitlaxy::theme::Theme;
 
 const USAGE: &str = "Usage: gitlaxy collect LOGIN [--output FILE]
@@ -22,8 +22,8 @@ through yesterday (UTC), the last complete day.
 Writes to standard output, or replaces FILE only after collection succeeds.
 Requires an authenticated GitHub CLI; in GitHub Actions, set GH_TOKEN to github.token.
 Render a collected SNAPSHOT into DIR: galaxy-dark.png, galaxy-light.png,
-galaxy-dark.gif, and galaxy-light.gif show the blue galaxy at stage 3 on the dark and
-light page backgrounds, and preview.html shows all four. The files are replaced only
+galaxy-dark.gif, and galaxy-light.gif show the blue galaxy at its contribution stage on
+the dark and light page backgrounds, and preview.html shows all four. The files are replaced only
 after all of them render.
 Errors go to stderr and exit 1; invalid usage exits 2.
 Examples: gitlaxy collect octocat --output snapshot.json
@@ -127,7 +127,8 @@ fn render_day(snapshot_path: &Path) -> Result<RenderedDay, String> {
     let light_png =
         encode_png(&light_frames[0]).map_err(|encoding_error| encoding_error.to_string())?;
     let caption = format!(
-        "Blue galaxy at stage {STILL_STAGE} for {}",
+        "Blue galaxy at stage {} for {}",
+        calculate_stage(galaxy_development.total_contributions),
         galaxy_development.observed_on
     );
     let preview_html = encode_preview_html(&caption);

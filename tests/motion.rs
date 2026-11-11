@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::f64::consts::{PI, TAU};
 use std::sync::LazyLock;
 
-use gitlaxy::galaxy::{GalaxyDevelopment, derive_galaxy_development};
+use gitlaxy::galaxy::{GalaxyDevelopment, MAX_GROWTH_CONTRIBUTIONS, derive_galaxy_development};
 use gitlaxy::history::AccountSnapshot;
 use gitlaxy::motion::{frame_rotation, twinkle_scale};
 use gitlaxy::render::{
@@ -165,7 +165,10 @@ static DARK_FRAMES: LazyLock<Vec<GalaxyFrame>> = LazyLock::new(|| {
 
 fn read_development() -> GalaxyDevelopment {
     let account_snapshot: AccountSnapshot = serde_json::from_str(HISTORY_FIXTURE).unwrap();
-    derive_galaxy_development(&account_snapshot).unwrap()
+    let mut galaxy_development = derive_galaxy_development(&account_snapshot).unwrap();
+    // The fixture's own total is stage one; the loop tests need a full spiral.
+    galaxy_development.total_contributions = MAX_GROWTH_CONTRIBUTIONS;
+    galaxy_development
 }
 
 fn differing_pixels(earlier: &GalaxyFrame, later: &GalaxyFrame) -> usize {
