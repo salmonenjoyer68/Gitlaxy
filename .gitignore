@@ -2,3 +2,15 @@
 /CLAUDE.md
 /library/
 /stage-preview.html
+
+# Local secrets and machine-specific files
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.token
+
+# Collected account snapshots stay local
+/snapshots/
+/snapshot.json
