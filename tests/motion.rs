@@ -5,7 +5,9 @@ use std::sync::LazyLock;
 use gitlaxy::colorway::Colorway;
 use gitlaxy::galaxy::{GalaxyDevelopment, derive_galaxy_development};
 use gitlaxy::history::AccountSnapshot;
-use gitlaxy::motion::{frame_rotation, twinkle_scale};
+use gitlaxy::motion::{
+    frame_rotation, mote_brightness, mote_count, mote_phase, mote_radius_share, twinkle_scale,
+};
 use gitlaxy::motion_state::MotionState;
 use gitlaxy::render::{
     FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, GalaxyFrame, LOOP_FRAME_COUNT, render_galaxy_frame,
@@ -167,6 +169,24 @@ fn twinkle_varies_and_returns_without_moving_stars() {
         brightest - darkest > 2_000,
         "twinkle is invisible in the rendered frames: {darkest}..{brightest}"
     );
+}
+
+/// Dust motes fall from the rim to the core once per loop, invisible at both ends, and
+/// the phase wraps exactly onto the next loop.
+#[test]
+fn dust_motes_fall_from_the_rim_to_the_core_each_loop() {
+    assert_eq!(
+        mote_phase(LOOP_FRAME_COUNT, 0.3).to_bits(),
+        mote_phase(0, 0.3).to_bits()
+    );
+    assert_eq!(mote_phase(LOOP_FRAME_COUNT / 2, 0.0), 0.5);
+    assert_eq!(mote_radius_share(0.0), 1.0);
+    assert_eq!(mote_radius_share(1.0), 0.0);
+    assert_eq!(mote_brightness(0.0), 0.0);
+    assert!(mote_brightness(1.0) < 1e-12);
+    assert!(mote_brightness(0.25) < mote_brightness(0.5));
+    assert!(mote_brightness(0.75) < mote_brightness(0.5));
+    assert!(mote_count(MotionState::Active) > mote_count(MotionState::Quiet));
 }
 
 static DARK_FRAMES: LazyLock<Vec<GalaxyFrame>> = LazyLock::new(|| {

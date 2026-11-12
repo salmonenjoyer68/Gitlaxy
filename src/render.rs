@@ -58,6 +58,13 @@ const FLARE_GLOW_RADIUS: f64 = 42.0;
 const TRAIL_PEAK_BRIGHTNESS: f64 = 0.55;
 /// Half-width of the comet trail across the arm, in pixels.
 const TRAIL_WIDTH_PIXELS: f64 = 1.8;
+/// Peak brightness a dust mote adds mid-fall.
+const MOTE_PEAK_BRIGHTNESS: f64 = 0.8;
+/// Mote glow half-width range, in canvas pixels.
+const MOTE_SIGMA_MIN: f64 = 0.45;
+const MOTE_SIGMA_SPAN: f64 = 0.45;
+/// Seed salt keeps the mote field independent of the stars, texture, and pigments.
+const MOTE_SALT: u64 = 0x4d4f_5445;
 
 /// Share of stars whose core takes a pigment color; the rest stay in the colorway.
 const PIGMENT_STAR_FRACTION: f64 = 0.42;
@@ -156,6 +163,13 @@ pub fn render_galaxy_frame(
             pigment_shares: &language_pigments,
             star_count: calculate_star_count(development.streaks.longest.len()),
         },
+    );
+    paint_motes(
+        &mut brightness,
+        &pose,
+        stage_scale,
+        frame_index,
+        motion_state,
     );
     let rgba_pixels = brightness
         .into_iter()
@@ -438,6 +452,60 @@ fn paint_stars(
                         tint[pixel_index] = Some(pigment);
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Paint dust motes falling from the rim into the core.
+///
+/// Each mote has a seeded phase offset and angle; the phase advances once per loop, so
+/// it moves steadily inward while the pose turns it with the galaxy, which reads as a
+/// spiral. Its brightness is zero at the rim and at the core, so neither a respawn nor
+/// the loop seam shows a jump. Quiet seeds fewer motes, and the shared brightness scale
+/// dims them further.
+fn paint_motes(
+    brightness: &mut [f64],
+    pose: &GalaxyPose,
+    scale: f64,
+    frame_index: u32,
+    state: MotionState,
+) {
+    let outer_radius = BASE_OUTER_RADIUS * STAR_OUTER_FRACTION * scale;
+    let mote_count = (motion::mote_count(state) as f64 * scale).ceil().max(1.0) as usize;
+    let mut rng = SeededRng::new(pose.texture_seed ^ MOTE_SALT);
+    for _ in 0..mote_count {
+        let phase = motion::mote_phase(frame_index, rng.unit());
+        let angle = rng.unit() * TAU;
+        let sigma = MOTE_SIGMA_MIN + MOTE_SIGMA_SPAN * rng.unit();
+        let peak = MOTE_PEAK_BRIGHTNESS * (0.6 + 0.4 * rng.unit()) * motion::mote_brightness(phase);
+        if peak <= 0.0 {
+            continue;
+        }
+        let radius = outer_radius * motion::mote_radius_share(phase);
+        let [screen_x, screen_y] = pose.to_screen(radius * angle.cos(), radius * angle.sin());
+        let center_x = CENTER_PIXELS + screen_x;
+        let center_y = CENTER_PIXELS + screen_y;
+        let reach = (sigma * 3.0).ceil() as i64;
+        let left = (center_x - reach as f64).floor() as i64;
+        let right = (center_x + reach as f64).ceil() as i64;
+        let top = (center_y - reach as f64).floor() as i64;
+        let bottom = (center_y + reach as f64).ceil() as i64;
+        for pixel_y in top..=bottom {
+            if pixel_y < 0 || pixel_y >= i64::from(FRAME_HEIGHT_PIXELS) {
+                continue;
+            }
+            for pixel_x in left..=right {
+                if pixel_x < 0 || pixel_x >= i64::from(FRAME_WIDTH_PIXELS) {
+                    continue;
+                }
+                let distance_x = pixel_x as f64 - center_x;
+                let distance_y = pixel_y as f64 - center_y;
+                let falloff = (-(distance_x * distance_x + distance_y * distance_y)
+                    / (2.0 * sigma * sigma))
+                    .exp();
+                let pixel_index = pixel_y as usize * FRAME_WIDTH_PIXELS as usize + pixel_x as usize;
+                brightness[pixel_index] += peak * falloff;
             }
         }
     }
