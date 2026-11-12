@@ -5,8 +5,9 @@
 //! stored between frames; a frame's pose depends only on the identity seed, its index,
 //! and the [`MotionState`]. Quiet is dimmer and twinkles sparsely and slowly; Active is
 //! brighter, twinkles densely, and flares exactly twice per loop at seeded phases.
+//! Dust motes fall from the rim into the core in both states, sparser when quiet.
 
-use std::f64::consts::TAU;
+use std::f64::consts::{PI, TAU};
 
 use crate::motion_state::MotionState;
 use crate::render::{LOOP_FRAME_COUNT, splitmix64};
@@ -26,6 +27,9 @@ const FLARE_HALF_WIDTH: u32 = 3;
 /// Seeded offsets so the two flares never land close together or on one frame.
 const FLARE_MIN_GAP: u32 = 45;
 const FLARE_GAP_SPAN: u64 = 31;
+/// Dust motes seeded at a stage's full size; the renderer scales them down with the stage.
+const ACTIVE_MOTE_COUNT: usize = 16;
+const QUIET_MOTE_COUNT: usize = 6;
 
 /// The frame's place in the loop, wrapping the one-past-the-end frame onto zero.
 pub fn loop_frame(frame_index: u32) -> u32 {
@@ -103,6 +107,33 @@ pub fn brightness_scale(state: MotionState) -> f64 {
         MotionState::Quiet => QUIET_BRIGHTNESS_SCALE,
         MotionState::Active => 1.0,
     }
+}
+
+/// How many dust motes a state seeds at a stage's full size; the renderer scales the
+/// count down with smaller stages.
+pub fn mote_count(state: MotionState) -> usize {
+    match state {
+        MotionState::Quiet => QUIET_MOTE_COUNT,
+        MotionState::Active => ACTIVE_MOTE_COUNT,
+    }
+}
+
+/// One dust mote's fall from the rim (zero) to the core (one). The seeded offset
+/// spreads motes around the loop, so the stream stays steady, and the phase advances
+/// once per loop and wraps exactly. [`mote_brightness`] is zero at both ends, so a
+/// mote's respawn at the rim never shows.
+pub fn mote_phase(frame_index: u32, phase_offset: f64) -> f64 {
+    (f64::from(loop_frame(frame_index)) / f64::from(LOOP_FRAME_COUNT) + phase_offset).fract()
+}
+
+/// Share of the outer radius a mote still sits from the center at its phase.
+pub fn mote_radius_share(phase: f64) -> f64 {
+    1.0 - phase
+}
+
+/// A mote's brightness envelope: zero at the rim and at the core, peaking mid-fall.
+pub fn mote_brightness(phase: f64) -> f64 {
+    (PI * phase).sin()
 }
 
 fn circular_frame_distance(from: u32, to: u32) -> u32 {
