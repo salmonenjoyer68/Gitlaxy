@@ -27,7 +27,7 @@ const FLARE_HALF_WIDTH: u32 = 3;
 /// Seeded offsets so the two flares never land close together or on one frame.
 const FLARE_MIN_GAP: u32 = 45;
 const FLARE_GAP_SPAN: u64 = 31;
-/// Dust motes seeded at a stage's full size; the renderer scales them down with the stage.
+/// Dust motes seeded at a stage's full size.
 const ACTIVE_MOTE_COUNT: usize = 16;
 const QUIET_MOTE_COUNT: usize = 6;
 
