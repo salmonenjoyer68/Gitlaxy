@@ -58,6 +58,13 @@ const FLARE_GLOW_RADIUS: f64 = 42.0;
 const TRAIL_PEAK_BRIGHTNESS: f64 = 0.55;
 /// Half-width of the comet trail across the arm, in pixels.
 const TRAIL_WIDTH_PIXELS: f64 = 1.8;
+/// Peak brightness a dust mote adds mid-fall.
+const MOTE_PEAK_BRIGHTNESS: f64 = 0.8;
+/// Mote glow half-width range, in canvas pixels.
+const MOTE_SIGMA_MIN: f64 = 0.45;
+const MOTE_SIGMA_SPAN: f64 = 0.45;
+/// Seed salt keeps the mote field independent of the stars, texture, and pigments.
+const MOTE_SALT: u64 = 0x4d4f_5445;
 
 /// Share of stars whose core takes a pigment color; the rest stay in the colorway.
 const PIGMENT_STAR_FRACTION: f64 = 0.42;
@@ -157,6 +164,13 @@ pub fn render_galaxy_frame(
             star_count: calculate_star_count(development.streaks.longest.len()),
         },
     );
+    paint_motes(
+        &mut brightness,
+        &pose,
+        stage_scale,
+        frame_index,
+        motion_state,
+    );
     let rgba_pixels = brightness
         .into_iter()
         .enumerate()
@@ -254,6 +268,11 @@ fn stage_scale(stage: u8) -> f64 {
     outer_radius / BASE_OUTER_RADIUS
 }
 
+/// The radius of the star field's rim at a stage scale.
+fn starfield_outer_radius(scale: f64) -> f64 {
+    BASE_OUTER_RADIUS * STAR_OUTER_FRACTION * scale
+}
+
 fn paint_galaxy(
     brightness: &mut [f64],
     tint: &mut [Option<Pigment>],
@@ -339,7 +358,7 @@ fn paint_trail(brightness: &mut [f64], pose: &GalaxyPose, scale: f64, streak_mar
         return;
     }
     let core_radius = CORE_RADIUS * scale;
-    let outer_radius = BASE_OUTER_RADIUS * STAR_OUTER_FRACTION * scale;
+    let outer_radius = starfield_outer_radius(scale);
     let start_radius = core_radius * 1.5;
     let end_radius = start_radius + (outer_radius - start_radius) * streak_marks.trail_length;
     let taper_width = 2.0 * scale;
@@ -371,6 +390,32 @@ struct StarfieldPaint<'a> {
     star_count: usize,
 }
 
+/// Add one Gaussian splat's light to the frame, clipped to the canvas.
+fn splat_gaussian(brightness: &mut [f64], center_x: f64, center_y: f64, sigma: f64, peak: f64) {
+    let reach = (sigma * 3.0).ceil() as i64;
+    let left = (center_x - reach as f64).floor() as i64;
+    let right = (center_x + reach as f64).ceil() as i64;
+    let top = (center_y - reach as f64).floor() as i64;
+    let bottom = (center_y + reach as f64).ceil() as i64;
+    for pixel_y in top..=bottom {
+        if pixel_y < 0 || pixel_y >= i64::from(FRAME_HEIGHT_PIXELS) {
+            continue;
+        }
+        for pixel_x in left..=right {
+            if pixel_x < 0 || pixel_x >= i64::from(FRAME_WIDTH_PIXELS) {
+                continue;
+            }
+            let distance_x = pixel_x as f64 - center_x;
+            let distance_y = pixel_y as f64 - center_y;
+            let falloff = (-(distance_x * distance_x + distance_y * distance_y)
+                / (2.0 * sigma * sigma))
+                .exp();
+            let pixel_index = pixel_y as usize * FRAME_WIDTH_PIXELS as usize + pixel_x as usize;
+            brightness[pixel_index] += peak * falloff;
+        }
+    }
+}
+
 fn paint_stars(
     brightness: &mut [f64],
     tint: &mut [Option<Pigment>],
@@ -385,7 +430,7 @@ fn paint_stars(
         pigment_shares,
         star_count,
     } = *starfield;
-    let star_outer_radius = BASE_OUTER_RADIUS * STAR_OUTER_FRACTION * scale;
+    let star_outer_radius = starfield_outer_radius(scale);
     let mut rng = SeededRng::new(pose.texture_seed);
     for star_index in 0..star_count {
         let radius = star_outer_radius * rng.unit().powf(1.35);
@@ -407,6 +452,10 @@ fn paint_stars(
         let [screen_x, screen_y] = pose.to_screen(radius * angle.cos(), radius * angle.sin());
         let center_x = CENTER_PIXELS + screen_x;
         let center_y = CENTER_PIXELS + screen_y;
+        splat_gaussian(brightness, center_x, center_y, sigma, peak);
+        let Some(pigment) = star_pigment else {
+            continue;
+        };
         let reach = (sigma * 3.0).ceil() as i64;
         let left = (center_x - reach as f64).floor() as i64;
         let right = (center_x + reach as f64).ceil() as i64;
@@ -425,21 +474,46 @@ fn paint_stars(
                 let falloff = (-(distance_x * distance_x + distance_y * distance_y)
                     / (2.0 * sigma * sigma))
                     .exp();
-                let pixel_index = pixel_y as usize * FRAME_WIDTH_PIXELS as usize + pixel_x as usize;
-                brightness[pixel_index] += peak * falloff;
-                if let Some(pigment) = star_pigment
-                    && falloff > PIGMENT_STAR_CORE_FALLOFF
-                {
+                if falloff > PIGMENT_STAR_CORE_FALLOFF {
                     let [disc_x, disc_y] = pose.to_disc(
                         pixel_x as f64 - CENTER_PIXELS,
                         pixel_y as f64 - CENTER_PIXELS,
                     );
                     if is_pigment_accent_pixel(pose, disc_x, disc_y) {
+                        let pixel_index =
+                            pixel_y as usize * FRAME_WIDTH_PIXELS as usize + pixel_x as usize;
                         tint[pixel_index] = Some(pigment);
                     }
                 }
             }
         }
+    }
+}
+
+/// Paint dust motes falling from the rim into the core.
+fn paint_motes(
+    brightness: &mut [f64],
+    pose: &GalaxyPose,
+    scale: f64,
+    frame_index: u32,
+    state: MotionState,
+) {
+    let outer_radius = starfield_outer_radius(scale);
+    let mote_count = (motion::mote_count(state) as f64 * scale).ceil().max(1.0) as usize;
+    let mut rng = SeededRng::new(pose.texture_seed ^ MOTE_SALT);
+    for _ in 0..mote_count {
+        let phase = motion::mote_phase(frame_index, rng.unit());
+        let angle = rng.unit() * TAU;
+        let sigma = MOTE_SIGMA_MIN + MOTE_SIGMA_SPAN * rng.unit();
+        let peak = MOTE_PEAK_BRIGHTNESS * (0.6 + 0.4 * rng.unit()) * motion::mote_brightness(phase);
+        if peak <= 0.0 {
+            continue;
+        }
+        let radius = outer_radius * motion::mote_radius_share(phase);
+        let [screen_x, screen_y] = pose.to_screen(radius * angle.cos(), radius * angle.sin());
+        let center_x = CENTER_PIXELS + screen_x;
+        let center_y = CENTER_PIXELS + screen_y;
+        splat_gaussian(brightness, center_x, center_y, sigma, peak);
     }
 }
 
