@@ -12,7 +12,7 @@ GitHub's page colors.
   </picture>
 </p>
 
-The loop above is the committed demo, generated on 2026-11-10 from
+The loop above is the committed demo, generated on 2026-11-11 from
 [`salmonenjoyer68`](https://github.com/salmonenjoyer68): **blue** colorway, **stage 2**
 of five, **active** motion (no quiet days in the recent run). See it on both page colors
 at [`docs/demo/preview.html`](docs/demo/preview.html), or download the assets directly:
