@@ -10,3 +10,8 @@ glow are generated from the account seed, the colorway palette, and the derived
 stage. This gives clean transparency, all five stages, and a seamless rotation
 and twinkle loop. The galaxy sheets remain the reference art for palettes and
 the README illustration, not the loop's frames.
+
+The dust mote stream advances once per Loop and wraps exactly: each mote falls
+from the rim to the core and reappears at the rim on the next Loop. Its
+brightness is zero at both ends, so the respawn and the seam show no jump.
+Quiet seeds fewer motes and dims them with the rest of the galaxy.

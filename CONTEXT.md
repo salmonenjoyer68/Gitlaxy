@@ -34,6 +34,11 @@ _Avoid_: behavior, mood, animation type
 A short bright pulse in an `Active` loop, fixed at a seeded loop phase.
 _Avoid_: burst, flash
 
+**Mote**:
+One grain of dust that drifts from the galaxy's rim into its core once per Loop,
+fading to nothing at both ends; its count follows the Stage and Motion state.
+_Avoid_: particle, speck, dot
+
 **Comet trail**:
 A glint trail along one arm whose length reflects the account's current
 contribution streak.
