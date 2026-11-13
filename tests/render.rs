@@ -116,8 +116,10 @@ fn the_first_stage_is_a_single_spark() {
         width >= 3 && height >= 3,
         "the spark is {width} by {height} pixels"
     );
+    // The spark is the nucleus plus its star splats, which reach about 18 pixels across
+    // once the disc sits nearly face-on.
     assert!(
-        width <= 16 && height <= 16,
+        width <= 20 && height <= 20,
         "stage one should be a spark, not a {width} by {height} galaxy"
     );
 }
@@ -210,6 +212,19 @@ fn each_colorway_draws_a_distinct_dominant_palette_in_both_themes() {
     }
 }
 
+/// The broken spiral has three primary arms: across the middle of the disc the third
+/// angular harmonic of the arm light outweighs the second.
+#[test]
+fn the_mid_disc_shows_three_primary_arms() {
+    let galaxy_frame = render_galaxy_still(&read_development(), Colorway::Blue, Theme::Dark);
+    let second = harmonic_amplitude(&galaxy_frame, 2.0);
+    let third = harmonic_amplitude(&galaxy_frame, 3.0);
+    assert!(
+        third > second,
+        "the third harmonic ({third}) is not stronger than the second ({second})"
+    );
+}
+
 #[test]
 fn a_current_streak_draws_a_longer_trail_in_stills_and_loop_frames() {
     let no_streak = development_with_streaks(0, 0);
@@ -273,6 +288,24 @@ fn a_streak_snapshot_renders_byte_identical_frames() {
             );
         }
     }
+}
+
+/// How much light the frame's mid-disc annulus holds in one angular harmonic.
+fn harmonic_amplitude(galaxy_frame: &GalaxyFrame, harmonic: f64) -> f64 {
+    let (mut sum_x, mut sum_y) = (0.0, 0.0);
+    for (pixel_index, pixel) in opaque_pixels(galaxy_frame).iter().enumerate() {
+        let offset_x = (pixel_index as u32 % FRAME_WIDTH_PIXELS) as f64 - 128.0;
+        let offset_y = (pixel_index as u32 / FRAME_WIDTH_PIXELS) as f64 - 128.0;
+        let radius = offset_x.hypot(offset_y);
+        if !(30.0..=62.0).contains(&radius) {
+            continue;
+        }
+        let weight = f64::from(pixel[2].saturating_sub(0x17));
+        let angle = harmonic * offset_y.atan2(offset_x);
+        sum_x += weight * angle.cos();
+        sum_y += weight * angle.sin();
+    }
+    sum_x.hypot(sum_y)
 }
 
 fn pixel_distance(left: [u8; 4], right: [u8; 4]) -> u32 {
