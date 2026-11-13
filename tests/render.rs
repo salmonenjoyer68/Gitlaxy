@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::f64::consts::TAU;
 
 use chrono::{Datelike, Days, NaiveDate};
 use gitlaxy::colorway::Colorway;
@@ -6,7 +7,7 @@ use gitlaxy::galaxy::{
     GalaxyDevelopment, RecentStreak, StreakDevelopment, calculate_stage, derive_galaxy_development,
 };
 use gitlaxy::history::{AccountSnapshot, ContributionWeek};
-use gitlaxy::markings::{STAR_DENSITY_FULL_WEEKS, TRAIL_FULL_WEEKS};
+use gitlaxy::markings::{STAR_DENSITY_FULL_WEEKS, TRAIL_FULL_WEEKS, calculate_star_count};
 use gitlaxy::render::{
     FRAME_HEIGHT_PIXELS, FRAME_WIDTH_PIXELS, GalaxyFrame, render_galaxy_frame, render_galaxy_still,
 };
@@ -116,6 +117,8 @@ fn the_first_stage_is_a_single_spark() {
         width >= 3 && height >= 3,
         "the spark is {width} by {height} pixels"
     );
+    // The spark is the nucleus plus the star splats seeded around it; the widest splat
+    // reaches about 15 pixels across at this scale.
     assert!(
         width <= 16 && height <= 16,
         "stage one should be a spark, not a {width} by {height} galaxy"
@@ -210,6 +213,19 @@ fn each_colorway_draws_a_distinct_dominant_palette_in_both_themes() {
     }
 }
 
+/// The broken spiral has three primary arms: across the middle of the disc the third
+/// angular harmonic of the arm light outweighs the second.
+#[test]
+fn the_mid_disc_shows_three_primary_arms() {
+    let galaxy_frame = render_galaxy_still(&read_development(), Colorway::Blue, Theme::Dark);
+    let second = harmonic_amplitude(&galaxy_frame, 2.0);
+    let third = harmonic_amplitude(&galaxy_frame, 3.0);
+    assert!(
+        third > second,
+        "the third harmonic ({third}) is not stronger than the second ({second})"
+    );
+}
+
 #[test]
 fn a_current_streak_draws_a_longer_trail_in_stills_and_loop_frames() {
     let no_streak = development_with_streaks(0, 0);
@@ -273,6 +289,208 @@ fn a_streak_snapshot_renders_byte_identical_frames() {
             );
         }
     }
+}
+
+/// Most star light sits beyond the core, so a longest streak's added stars there must
+/// gather into compact knots along the three arms rather than spread evenly or run
+/// smoothly down each arm. Comparing two star counts isolates the stars from the disc,
+/// which never changes between the two renders.
+///
+/// Two independent measurements pin that down. The angular contrast compares the added
+/// light on the arms with the interarm gaps, and the support per star measures how much
+/// frame area each added star lights: stars packed into knots overlap, while a smooth
+/// arm or a uniform field spreads every star over its own patch.
+#[test]
+fn outer_star_knots_gather_along_the_three_arms() {
+    const BIN_COUNT: usize = 36;
+    const INNER_RADIUS: f64 = 40.0;
+    const OUTER_RADIUS: f64 = 106.0;
+    let short_record = development_with_streaks(0, 1);
+    let long_record = development_with_streaks(0, STAR_DENSITY_FULL_WEEKS);
+    let short_frame = render_galaxy_still(&short_record, Colorway::Blue, Theme::Dark);
+    let long_frame = render_galaxy_still(&long_record, Colorway::Blue, Theme::Dark);
+    let short_blue = blue_channel(&short_frame);
+    let long_blue = blue_channel(&long_frame);
+    let added_light: Vec<f64> = short_blue
+        .iter()
+        .zip(&long_blue)
+        .map(|(short, long)| (long - short).max(0.0))
+        .collect();
+    let mut angular_light = [0.0; BIN_COUNT];
+    for (pixel_index, light) in added_light.iter().enumerate() {
+        let (radius, angle) = polar_position(pixel_index);
+        if !(INNER_RADIUS..=OUTER_RADIUS).contains(&radius) {
+            continue;
+        }
+        let bin = (angle.rem_euclid(TAU) / TAU * BIN_COUNT as f64) as usize % BIN_COUNT;
+        angular_light[bin] += light;
+    }
+    let mut sorted_light = angular_light;
+    sorted_light.sort_by(f64::total_cmp);
+    let arm_mean = sorted_light[BIN_COUNT * 3 / 4..].iter().sum::<f64>() / (BIN_COUNT / 4) as f64;
+    let gap_mean = sorted_light[..BIN_COUNT / 2].iter().sum::<f64>() / (BIN_COUNT / 2) as f64;
+    assert!(
+        arm_mean > gap_mean * 8.0,
+        "the added stars are not gathered on the arms: arm bins average {arm_mean}, \
+         interarm bins average {gap_mean}"
+    );
+    let total_light: f64 = added_light.iter().sum();
+    assert!(total_light > 0.0, "the outer annulus gained no star light");
+    let squared_light: f64 = added_light.iter().map(|light| light * light).sum();
+    let added_stars =
+        (calculate_star_count(STAR_DENSITY_FULL_WEEKS) - calculate_star_count(1)) as f64;
+    // The participation ratio counts the effective pixels the added light occupies.
+    let support_per_star = total_light * total_light / squared_light / added_stars;
+    assert!(
+        support_per_star < 3.2,
+        "the added stars are spread thin rather than knotted: {support_per_star} pixels \
+         of support per star"
+    );
+}
+
+/// The comet trail must follow luminous arm material, never an interarm gap: its added
+/// light sits on material far brighter than the median annulus pixel, and only a small
+/// share of it crosses the dim sections of its own arm.
+#[test]
+fn the_comet_trail_stays_on_luminous_arm_material() {
+    const BAND_INNER: f64 = 25.0;
+    const BAND_OUTER: f64 = 110.0;
+    const BLUR_RADIUS: i64 = 5;
+    let no_trail = development_with_streaks(0, 0);
+    let full_trail = development_with_streaks(TRAIL_FULL_WEEKS, 0);
+    let base_blue = blue_channel(&render_galaxy_still(&no_trail, Colorway::Blue, Theme::Dark));
+    let trailed_blue = blue_channel(&render_galaxy_still(
+        &full_trail,
+        Colorway::Blue,
+        Theme::Dark,
+    ));
+    let added_light: Vec<f64> = base_blue
+        .iter()
+        .zip(&trailed_blue)
+        .map(|(base, trailed)| (trailed - base).max(0.0))
+        .collect();
+    // A wide box average of the untouched frame leaves the broad arm material, which the
+    // narrow trail light must sit on.
+    let mut neighbourhood = vec![0.0; base_blue.len()];
+    for pixel_y in 0..i64::from(FRAME_HEIGHT_PIXELS) {
+        for pixel_x in 0..i64::from(FRAME_WIDTH_PIXELS) {
+            let mut sum = 0.0;
+            let mut count = 0.0;
+            for blur_y in -BLUR_RADIUS..=BLUR_RADIUS {
+                for blur_x in -BLUR_RADIUS..=BLUR_RADIUS {
+                    let sample_x = (pixel_x + blur_x).clamp(0, i64::from(FRAME_WIDTH_PIXELS) - 1);
+                    let sample_y = (pixel_y + blur_y).clamp(0, i64::from(FRAME_HEIGHT_PIXELS) - 1);
+                    sum +=
+                        base_blue[(sample_y * i64::from(FRAME_WIDTH_PIXELS) + sample_x) as usize];
+                    count += 1.0;
+                }
+            }
+            neighbourhood[(pixel_y * i64::from(FRAME_WIDTH_PIXELS) + pixel_x) as usize] =
+                sum / count;
+        }
+    }
+    let mut annulus_light = Vec::new();
+    let (mut added_total, mut added_on_material) = (0.0, 0.0);
+    for (pixel_index, light) in added_light.iter().enumerate() {
+        let (radius, _) = polar_position(pixel_index);
+        if !(BAND_INNER..=BAND_OUTER).contains(&radius) {
+            continue;
+        }
+        annulus_light.push(neighbourhood[pixel_index]);
+        added_total += light;
+        added_on_material += light * neighbourhood[pixel_index];
+    }
+    annulus_light.sort_by(f64::total_cmp);
+    let annulus_mean = annulus_light.iter().sum::<f64>() / annulus_light.len() as f64;
+    let annulus_median = annulus_light[annulus_light.len() / 2];
+    let trail_material = added_on_material / added_total;
+    assert!(added_total > 0.0, "the running streak added no trail light");
+    // The annulus mixes bright arms with dark gaps, so its median marks interarm
+    // material: a trail drawn across a gap would average near it.
+    assert!(
+        trail_material > annulus_median * 2.0,
+        "the trail lights dim material: {trail_material:.1} under the trail against an \
+         annulus median of {annulus_median:.1} and mean of {annulus_mean:.1}"
+    );
+    let mut added_below_median = 0.0;
+    for (pixel_index, light) in added_light.iter().enumerate() {
+        if neighbourhood[pixel_index] < annulus_median {
+            added_below_median += light;
+        }
+    }
+    assert!(
+        added_below_median / added_total < 0.3,
+        "{:.0}% of the trail light falls on material below the annulus median",
+        added_below_median / added_total * 100.0
+    );
+}
+
+/// The nucleus stays a compact, intense core rather than a soft blob, so the inner arms
+/// stay readable beside it.
+#[test]
+fn the_nucleus_stays_a_compact_core() {
+    for theme in [Theme::Dark, Theme::Light] {
+        let galaxy_frame = render_galaxy_still(&read_development(), Colorway::Blue, theme);
+        let pixels = opaque_pixels(&galaxy_frame);
+        let background_blue = f64::from(theme.background()[2]);
+        let brightness = |pixel: [u8; 4]| (f64::from(pixel[2]) - background_blue).abs();
+        let brightest = pixels
+            .iter()
+            .map(|pixel| brightness(*pixel))
+            .fold(0.0, f64::max);
+        let core_pixels = pixels
+            .iter()
+            .enumerate()
+            .filter(|(pixel_index, pixel)| {
+                polar_position(*pixel_index).0 <= 16.0 && brightness(**pixel) >= brightest * 0.9
+            })
+            .count();
+        assert!(
+            core_pixels > 0,
+            "the galaxy has no bright core on {theme:?}"
+        );
+        assert!(
+            core_pixels < 100,
+            "the nucleus spreads over {core_pixels} near-brightest pixels on {theme:?}"
+        );
+    }
+}
+
+/// The blue channel of every pixel, the channel a dark-theme galaxy brightens.
+fn blue_channel(galaxy_frame: &GalaxyFrame) -> Vec<f64> {
+    galaxy_frame
+        .as_rgba_bytes()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|channels| f64::from(channels[2]))
+        .collect()
+}
+
+/// One pixel's distance from the canvas center and its angle around it.
+fn polar_position(pixel_index: usize) -> (f64, f64) {
+    let center = f64::from(FRAME_WIDTH_PIXELS) / 2.0;
+    let offset_x = (pixel_index as u32 % FRAME_WIDTH_PIXELS) as f64 - center;
+    let offset_y = (pixel_index as u32 / FRAME_WIDTH_PIXELS) as f64 - center;
+    (offset_x.hypot(offset_y), offset_y.atan2(offset_x))
+}
+
+/// How much light the frame's mid-disc annulus holds in one angular harmonic.
+fn harmonic_amplitude(galaxy_frame: &GalaxyFrame, harmonic: f64) -> f64 {
+    let (mut sum_x, mut sum_y) = (0.0, 0.0);
+    for (pixel_index, pixel) in opaque_pixels(galaxy_frame).iter().enumerate() {
+        let offset_x = (pixel_index as u32 % FRAME_WIDTH_PIXELS) as f64 - 128.0;
+        let offset_y = (pixel_index as u32 / FRAME_WIDTH_PIXELS) as f64 - 128.0;
+        let radius = offset_x.hypot(offset_y);
+        if !(30.0..=62.0).contains(&radius) {
+            continue;
+        }
+        let weight = f64::from(pixel[2].saturating_sub(0x17));
+        let angle = harmonic * offset_y.atan2(offset_x);
+        sum_x += weight * angle.cos();
+        sum_y += weight * angle.sin();
+    }
+    sum_x.hypot(sum_y)
 }
 
 fn pixel_distance(left: [u8; 4], right: [u8; 4]) -> u32 {

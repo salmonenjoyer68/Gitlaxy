@@ -8,14 +8,18 @@ GitHub's page colors.
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/demo/galaxy-dark.gif" />
     <img src="docs/demo/galaxy-light.gif" width="512" height="512"
-      alt="A looping pixel-art galaxy for the GitHub account salmonenjoyer68: blue colorway, stage 2 of 5, active motion, on the light page background" />
+      alt="A looping pixel-art galaxy for the GitHub account salmonenjoyer68: blue colorway, stage 2 of 5, active motion, three broken spiral arms around a compact bright nucleus, on the light page background" />
   </picture>
 </p>
 
-The loop above is the committed demo, generated on 2026-11-11 from
+The loop above is the committed demo, generated on 2026-11-12 from
 [`salmonenjoyer68`](https://github.com/salmonenjoyer68): **blue** colorway, **stage 2**
-of five, **active** motion (no quiet days in the recent run). See it on both page colors
-at [`docs/demo/preview.html`](docs/demo/preview.html), or download the assets directly:
+of five, **active** motion (no quiet days in the recent run). Every galaxy is a
+near-face-on disk of three asymmetric, broken spiral arms: short branches, dark
+interarm gaps, star knots along the luminous sections, a compact intense nucleus
+inside a faint wider bulge, and a comet trail on one arm for a running streak. See it
+on both page colors at [`docs/demo/preview.html`](docs/demo/preview.html), or download
+the assets directly:
 
 | File | Contents |
 | --- | --- |
@@ -31,13 +35,13 @@ at [`docs/demo/preview.html`](docs/demo/preview.html), or download the assets di
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/galax-black.png" />
     <img src="docs/galax-white.png"
-      alt="Six pixel-art galaxies — blue, red, orange, purple, green, and pink — each shown at five growth stages from a single spark to a full spiral" />
+      alt="Six pixel-art galaxies — blue, red, orange, purple, green, and pink — each shown at five growth stages from a single spark to a broken three-arm spiral" />
   </picture>
 </p>
 
 The sheet is the catalog: the blue, red, orange, purple, green, and pink galaxy, each
-from a single spark to a full spiral. `docs/galax-black.png` is drawn for dark pages and
-`docs/galax-white.png` for light ones.
+from a single spark to a broken three-arm spiral. `docs/galax-black.png` is drawn for
+dark pages and `docs/galax-white.png` for light ones.
 
 A galaxy grows with the account's contribution total: stage 1 from 0, stage 2 from 250,
 stage 3 from 750, stage 4 from 1,250, and stage 5 from 1,500 contributions. A quiet

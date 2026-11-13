@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::TAU;
 use std::sync::LazyLock;
 
 use gitlaxy::colorway::Colorway;
@@ -110,7 +110,7 @@ fn the_loop_seam_is_no_larger_than_an_adjacent_frame_change() {
     );
 }
 
-/// The two-armed spiral turns clockwise, one whole turn per loop. The second angular
+/// The three-armed pattern turns clockwise, one whole turn per loop. The third angular
 /// harmonic of the arm brightness advances by the rotation angle each frame.
 #[test]
 fn the_galaxy_turns_clockwise_through_one_turn_per_loop() {
@@ -119,12 +119,12 @@ fn the_galaxy_turns_clockwise_through_one_turn_per_loop() {
     let mut total_step = 0.0;
     for adjacent_pair in arm_phases.windows(2) {
         let mut step = adjacent_pair[1] - adjacent_pair[0];
-        // A two-armed pattern repeats every PI, so fold the measured step into that span.
-        while step <= -PI / 2.0 {
-            step += PI;
+        // A three-armed pattern repeats every TAU / 3, so fold the step into that span.
+        while step <= -TAU / 6.0 {
+            step += TAU / 3.0;
         }
-        while step > PI / 2.0 {
-            step -= PI;
+        while step > TAU / 6.0 {
+            step -= TAU / 3.0;
         }
         assert!(
             step > 0.0,
@@ -224,7 +224,7 @@ fn differing_pixels(earlier: &GalaxyFrame, later: &GalaxyFrame) -> usize {
         .count()
 }
 
-/// The arm angle from the second angular harmonic of brightness in an annulus, which
+/// The arm angle from the third angular harmonic of brightness in an annulus, which
 /// keeps the core and the frame edge from dominating the measurement.
 fn measured_arm_phase(galaxy_frame: &GalaxyFrame) -> f64 {
     let mut harmonic_x = 0.0;
@@ -243,11 +243,11 @@ fn measured_arm_phase(galaxy_frame: &GalaxyFrame) -> f64 {
             continue;
         }
         let weight = f64::from(blue.saturating_sub(0x17));
-        let doubled_angle = 2.0 * offset_y.atan2(offset_x);
-        harmonic_x += weight * doubled_angle.cos();
-        harmonic_y += weight * doubled_angle.sin();
+        let tripled_angle = 3.0 * offset_y.atan2(offset_x);
+        harmonic_x += weight * tripled_angle.cos();
+        harmonic_y += weight * tripled_angle.sin();
     }
-    harmonic_y.atan2(harmonic_x) / 2.0
+    harmonic_y.atan2(harmonic_x) / 3.0
 }
 
 fn total_blue(galaxy_frame: &GalaxyFrame) -> u64 {

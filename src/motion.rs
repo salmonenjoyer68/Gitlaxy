@@ -37,7 +37,9 @@ pub fn loop_frame(frame_index: u32) -> u32 {
 }
 
 /// The rotation added to the base pose, in radians: clockwise on screen, one whole turn
-/// per loop. Positive angles are clockwise because the canvas's y axis points down.
+/// per loop. Positive angles are clockwise because the canvas's y axis points down. The
+/// turn is an accelerated schematic pattern rotation, not a physical orbit: the arms are
+/// a brightness pattern that the disc's light turns through, not material carried round.
 pub fn frame_rotation(frame_index: u32) -> f64 {
     TAU * f64::from(loop_frame(frame_index)) / f64::from(LOOP_FRAME_COUNT)
 }

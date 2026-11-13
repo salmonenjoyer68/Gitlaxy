@@ -1,9 +1,9 @@
 //! The six galaxy colorways and their per-theme color ramps.
 //!
-//! Palettes are sampled from the reference galaxy sheets in `docs/`: each colorway is
-//! one horizontal band of six stages, and its anchors are the dominant colors of that
-//! band. The renderer interpolates the anchors into a 128-level ordered-dither ramp that
-//! starts at the exact theme background.
+//! Palettes are sampled from the reference galaxy sheets in `docs/`: each colorway is one
+//! row of five stages, and its anchors are the dominant colors of that row. The renderer
+//! interpolates the anchors into a 128-level ordered-dither ramp that starts at the exact
+//! theme background.
 
 use crate::theme::Theme;
 
