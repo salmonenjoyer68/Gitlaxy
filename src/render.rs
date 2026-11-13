@@ -55,8 +55,14 @@ const CORE_RADIUS: f64 = 17.0;
 const ARM_PEAK: f64 = 1.6;
 /// Radial e-folding length of the arm light at the base stage scale.
 const ARM_FALLOFF_RADIUS: f64 = 52.0;
+/// A short branch runs over this share of its arm's length, its ends fading across these
+/// many pixels at the stage's scale.
+const BRANCH_START_SHARE: f64 = 0.42;
+const BRANCH_END_SHARE: f64 = 0.98;
+const BRANCH_FADE_PIXELS: f64 = 9.0;
+const BRANCH_TAPER_PIXELS: f64 = 12.0;
 /// A compact, intense nucleus inside a much fainter, wider bulge.
-const NUCLEUS_RADIUS: f64 = 5.0;
+const NUCLEUS_RADIUS: f64 = 3.1;
 const NUCLEUS_PEAK: f64 = 2.0;
 const BULGE_RADIUS: f64 = 30.0;
 const BULGE_PEAK: f64 = 0.2;
@@ -79,6 +85,9 @@ const MOTE_SIGMA_MIN: f64 = 0.45;
 const MOTE_SIGMA_SPAN: f64 = 0.45;
 /// Seed salt keeps the mote field independent of the stars, texture, and pigments.
 const MOTE_SALT: u64 = 0x4d4f_5445;
+/// The earliest share of the outer radius where the rim fade can start. Every disc pixel
+/// inside it keeps full brightness, so the renderer skips the rim noise there.
+const RIM_FADE_START_MIN_SHARE: f64 = 0.66;
 /// Seed salts keep the arm shapes, their broken light, and the rim separate: changing one
 /// field does not reshuffle the rest.
 const ARM_SHAPE_SALT: u64 = 0x4152_4d53_4841_5045;
@@ -88,9 +97,14 @@ const RIM_SALT: u64 = 0x5249_4d46_4144_4553;
 /// Share of stars grouped into knots along the primary arms; the rest fill the faint
 /// disc and outer rim.
 const ARM_STAR_SHARE: f64 = 0.78;
-/// Knots per primary arm. Their radii and populations are seeded, so the spacing is
-/// never equal.
-const KNOTS_PER_ARM: usize = 5;
+/// Each arm carries this many knots, plus a seeded count up to the span: the count, the
+/// radii, and the populations differ per arm, so no two arms read alike.
+const KNOTS_PER_ARM_MIN: usize = 3;
+const KNOTS_PER_ARM_SPAN: usize = 4;
+/// Knot radii span this share of the star field's outer radius, well outside the core so
+/// the inner arms stay readable.
+const KNOT_INNER_SHARE: f64 = 0.3;
+const KNOT_OUTER_SHARE: f64 = 0.95;
 /// Lateral scatter of a knot's stars around the arm centerline, in disc pixels.
 const KNOT_SCATTER_PIXELS: f64 = 0.95;
 /// Scatter along the arm, so a knot reads as a short chain rather than a dot.
@@ -141,10 +155,10 @@ impl GalaxyFrame {
 
 /// Render one opaque still of the galaxy in `colorway` on the chosen theme background.
 ///
-/// The identity seed fixes the spiral rotation, arm phase, texture, and stars; identical
-/// developments, colorways, and themes produce identical pixels without I/O, clock
-/// reads, or input mutation. The still is loop frame zero, the base pose the loop turns
-/// from.
+/// The identity seed fixes the spiral rotation, arm phase, the arms' shapes and branches,
+/// the texture, the star knots, and the stars; identical developments, colorways, and
+/// themes produce identical pixels without I/O, clock reads, or input mutation. The still
+/// is loop frame zero, the base pose the loop turns from.
 pub fn render_galaxy_still(
     development: &GalaxyDevelopment,
     colorway: Colorway,
@@ -271,32 +285,57 @@ struct ArmShape {
     branch_offset: f64,
 }
 
-/// The three primary arms' seeded shapes. Two arms carry a faint short branch and one is
-/// left bare, so the fan stays visibly asymmetric.
+/// The three primary arms' seeded shapes. One or two arms carry a faint short branch at
+/// its own seeded offset, so the fan stays visibly asymmetric and no two branches sit
+/// alike.
 fn seeded_arm_shapes(seed: u64) -> [ArmShape; PRIMARY_ARM_COUNT] {
-    let bare_arm = (hash_unit(seed, 0, 4, ARM_SHAPE_SALT) * PRIMARY_ARM_COUNT as f64) as usize
+    let branch_count = 1 + usize::from(hash_unit(seed, 0, 4, ARM_SHAPE_SALT) < 0.5);
+    let first_branched =
+        (hash_unit(seed, 0, 5, ARM_SHAPE_SALT) * PRIMARY_ARM_COUNT as f64) as usize;
+    let second_branched = (first_branched
+        + 1
+        + (hash_unit(seed, 0, 6, ARM_SHAPE_SALT) * (PRIMARY_ARM_COUNT - 1) as f64) as usize)
         % PRIMARY_ARM_COUNT;
-    let branch_offset = 0.5 + 0.55 * hash_unit(seed, 0, 5, ARM_SHAPE_SALT);
     let mut shapes = [ArmShape {
         strength: 1.0,
         width: 1.0,
         reach: 1.0,
         branch_strength: 0.0,
-        branch_offset,
+        branch_offset: 0.0,
     }; PRIMARY_ARM_COUNT];
+    // Each field's seeded values are ranked across the three arms and spread over the
+    // range, so the fan always reads asymmetric: one arm is distinctly the strongest,
+    // widest, and longest, and one the faintest and shortest.
+    let mut units = [[0.0; 3]; PRIMARY_ARM_COUNT];
+    for (arm_index, row) in units.iter_mut().enumerate() {
+        for (field, unit) in row.iter_mut().enumerate() {
+            *unit = hash_unit(seed, arm_index as i64, field as i64, ARM_SHAPE_SALT);
+        }
+    }
+    for field in 0..3 {
+        let mut ranked = [0, 1, 2];
+        ranked.sort_unstable_by(|left, right| units[*left][field].total_cmp(&units[*right][field]));
+        for (rank, arm_index) in ranked.into_iter().enumerate() {
+            units[arm_index][field] =
+                (rank as f64 + 0.15 + 0.7 * units[arm_index][field]) / PRIMARY_ARM_COUNT as f64;
+        }
+    }
     for (arm_index, shape) in shapes.iter_mut().enumerate() {
+        // Every other arm field seeds from the arm index and its own field index under
+        // the one shape salt, so one arm's shape never reshuffles another's.
         let arm_row = arm_index as i64;
-        let branched = arm_index != bare_arm;
+        let branched =
+            arm_index == first_branched || (branch_count == 2 && arm_index == second_branched);
         *shape = ArmShape {
-            strength: 0.72 + 0.5 * hash_unit(seed, arm_row, 0, ARM_SHAPE_SALT),
-            width: 0.7 + 0.65 * hash_unit(seed, arm_row, 1, ARM_SHAPE_SALT),
-            reach: 0.78 + 0.5 * hash_unit(seed, arm_row, 2, ARM_SHAPE_SALT),
+            strength: 0.5 + 0.95 * units[arm_index][0],
+            width: 0.55 + 1.2 * units[arm_index][1],
+            reach: 0.65 + 0.85 * units[arm_index][2],
             branch_strength: if branched {
                 0.24 + 0.16 * hash_unit(seed, arm_row, 3, ARM_SHAPE_SALT)
             } else {
                 0.0
             },
-            branch_offset,
+            branch_offset: 0.5 + 0.55 * hash_unit(seed, arm_row, 7, ARM_SHAPE_SALT),
         };
     }
     shapes
@@ -388,7 +427,7 @@ fn paint_galaxy(
         let [disc_x, disc_y] = pose.to_disc(offset_x, offset_y);
         let radius = disc_x.hypot(disc_y);
         let angle = disc_y.atan2(disc_x);
-        let nucleus = NUCLEUS_PEAK * (-(radius / (NUCLEUS_RADIUS * scale)).powi(2)).exp();
+        let nucleus = NUCLEUS_PEAK * (-(radius / (NUCLEUS_RADIUS * scale)).powf(2.4)).exp();
         let bulge = BULGE_PEAK * (-(radius / (BULGE_RADIUS * scale)).powi(2)).exp();
         let disk = DISK_PEAK * (-radius / disc_falloff).exp();
         let arm = ARM_PEAK
@@ -401,8 +440,13 @@ fn paint_galaxy(
                 pose.texture_seed,
             );
         let texture = 0.92 + 0.10 * value_noise(pose.texture_seed, disc_x * 0.09, disc_y * 0.09, 0);
-        let fade_start = rim_fade_start(pose.texture_seed, offset_y.atan2(offset_x), outer_radius);
-        let fade = 1.0 - smooth_step(screen_radius, fade_start, outer_radius);
+        let fade = if screen_radius <= outer_radius * RIM_FADE_START_MIN_SHARE {
+            1.0
+        } else {
+            let fade_start =
+                rim_fade_start(pose.texture_seed, offset_y.atan2(offset_x), outer_radius);
+            1.0 - smooth_step(screen_radius, fade_start, outer_radius)
+        };
         let flare = flare_intensity
             * FLARE_GLOW_PEAK
             * (-(screen_radius / (FLARE_GLOW_RADIUS * 0.67)).powi(2)).exp()
@@ -445,9 +489,21 @@ fn arm_centerline(radius: f64, arm_index: usize, arm_phase: f64, scale: f64) -> 
     arm_phase - wind * ARM_PITCH + arm_index as f64 * TAU / PRIMARY_ARM_COUNT as f64
 }
 
+/// Where one arm's short outer branch is present at a disc radius: zero outside the
+/// branch's share of the arm's length, smooth in and out at its ends.
+fn branch_band(radius: f64, arm_length: f64, scale: f64) -> f64 {
+    let branch_start = arm_length * BRANCH_START_SHARE;
+    let branch_end = arm_length * BRANCH_END_SHARE;
+    smooth_step(
+        radius,
+        branch_start,
+        branch_start + BRANCH_FADE_PIXELS * scale,
+    ) * (1.0 - smooth_step(radius, branch_end - BRANCH_TAPER_PIXELS * scale, branch_end))
+}
+
 /// The broken three-armed pattern's local brightness: a gaussian ridge along each arm's
 /// shared centerline, split into uneven luminous sections, plus a faint shorter branch on
-/// two of the arms.
+/// one or two arms.
 fn arm_profile(
     radius: f64,
     angle: f64,
@@ -467,34 +523,32 @@ fn arm_profile(
         if falloff < 0.01 {
             continue;
         }
-        let arm_row = arm_index as f64 * 7.0;
+        // The arm index is the noise row, so each arm ripples independently.
+        let arm_row = arm_index as f64;
         let centerline = arm_centerline(radius, arm_index, arm_phase, scale);
         let width = shape.width * (0.09 + 2.2 / radius);
         let ridge = (-(wrap_angle(angle - centerline) / width).powi(2)).exp();
-        let sections = 0.35
-            + 0.65
+        let sections = 0.06
+            + 0.94
                 * smooth_step(
-                    value_noise(texture_seed, radius * 0.075, arm_row, ARM_TEXTURE_SALT),
-                    0.28,
-                    0.68,
+                    value_noise(texture_seed, radius * 0.09, arm_row, ARM_TEXTURE_SALT),
+                    0.46,
+                    0.66,
                 );
-        let knots =
+        let radial_gain =
             0.85 + 0.3 * value_noise(texture_seed, radius * 0.11, arm_row, ARM_TEXTURE_SALT ^ 1);
-        brightness += shape.strength * ridge * falloff * sections * knots;
+        brightness += shape.strength * ridge * falloff * sections * radial_gain;
         if shape.branch_strength <= 0.0 {
             continue;
         }
-        let branch_start = arm_length * 0.42;
-        let branch_end = arm_length * 0.98;
-        let branch_band = smooth_step(radius, branch_start, branch_start + 9.0 * scale)
-            * (1.0 - smooth_step(radius, branch_end - 12.0 * scale, branch_end));
-        if branch_band <= 0.0 {
+        let band = branch_band(radius, arm_length, scale);
+        if band <= 0.0 {
             continue;
         }
         let branch_angle = centerline + shape.branch_offset;
         let branch_width = width * 0.85;
         let branch_ridge = (-(wrap_angle(angle - branch_angle) / branch_width).powi(2)).exp();
-        brightness += shape.branch_strength * branch_ridge * falloff * branch_band;
+        brightness += shape.branch_strength * branch_ridge * falloff * band;
     }
     gate * brightness
 }
@@ -507,7 +561,7 @@ fn rim_fade_start(texture_seed: u64, angle: f64, outer_radius: f64) -> f64 {
     let (cos_angle, sin_angle) = (angle.cos(), angle.sin());
     let broad = value_noise(texture_seed, 2.4 * cos_angle, 2.4 * sin_angle, RIM_SALT);
     let fine = value_noise(texture_seed, 6.0 * cos_angle, 6.0 * sin_angle, RIM_SALT ^ 1);
-    outer_radius * (0.66 + 0.18 * (0.7 * broad + 0.3 * fine))
+    outer_radius * (RIM_FADE_START_MIN_SHARE + 0.18 * (0.7 * broad + 0.3 * fine))
 }
 
 /// Add the running streak's comet glint along the strongest primary arm.
@@ -588,35 +642,67 @@ struct StarKnot {
     radius: f64,
     /// Disc angle of the knot's center.
     angle: f64,
-    /// Population and brightness weight: a few knots are dense and bright, most faint.
+    /// Population and brightness weight, from zero through one: a few knots are dense
+    /// and bright, most are faint.
     glow: f64,
     /// Spread multiplier, so knots vary between tight and loose.
     spread: f64,
 }
 
-/// Every primary arm's knots for the seeded pose. Knot radii, populations, and branch
-/// placement use their own seed salts, so changing the arm shape or texture leaves the
-/// star field unchanged. Radii are seeded independently, never at equal intervals.
-fn seeded_star_knots(identity_seed: u64, pose: &GalaxyPose, scale: f64) -> Vec<StarKnot> {
+/// One primary arm's knots and their total population weight, so a uniform pick can
+/// choose a knot in proportion to its seeded glow.
+struct ArmKnots {
+    knots: Vec<StarKnot>,
+    total_glow: f64,
+}
+
+impl ArmKnots {
+    /// The knot whose share of the arm's population contains `pick`, counted up in the
+    /// same order the knots were seeded.
+    fn knot_at(&self, mut pick: f64) -> StarKnot {
+        for knot in &self.knots {
+            pick -= knot.glow;
+            if pick <= 0.0 {
+                return *knot;
+            }
+        }
+        self.knots[self.knots.len() - 1]
+    }
+}
+
+/// Every primary arm's knots for the seeded pose, one row per arm. Knot count, radii,
+/// populations, and branch placement use their own seed salts, so changing the arm shape
+/// or texture leaves the star field unchanged. Each knot count, spacing curve, and
+/// interval is seeded, so no two arms place knots at the same radii.
+fn seeded_star_knots(identity_seed: u64, pose: &GalaxyPose, scale: f64) -> Vec<ArmKnots> {
     let outer_radius = starfield_outer_radius(scale);
-    let mut knots = Vec::with_capacity(PRIMARY_ARM_COUNT * KNOTS_PER_ARM);
+    let mut arm_knots = Vec::with_capacity(PRIMARY_ARM_COUNT);
     for (arm_index, shape) in pose.arm_shapes.iter().enumerate() {
-        let arm_row = arm_index as i64 * 11;
+        let arm_row = arm_index as i64;
+        let knot_count = KNOTS_PER_ARM_MIN
+            + (hash_unit(identity_seed, arm_row, 8, STAR_KNOT_SALT) * KNOTS_PER_ARM_SPAN as f64)
+                as usize;
+        // Exponents above one stretch the outer intervals, so knots bunch near the core
+        // or fan out toward the rim arm by arm.
+        let spacing_power = 1.0 + 1.4 * hash_unit(identity_seed, arm_row, 9, STAR_KNOT_SALT);
         let arm_length = ARM_FALLOFF_RADIUS * scale * shape.reach;
-        let branch_start = arm_length * 0.42;
-        let branch_end = arm_length * 0.98;
-        for knot_index in 0..KNOTS_PER_ARM {
+        let mut knots = Vec::with_capacity(knot_count);
+        let mut total_glow = 0.0;
+        for knot_index in 0..knot_count {
             let knot_row = knot_index as i64;
-            let radius_share = hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SALT);
-            let radius = outer_radius * (0.16 + 0.82 * radius_share.powf(0.9));
-            let glow = 0.32
-                + 1.7 * hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SHAPE_SALT).powi(3);
+            let share = (knot_index as f64
+                + 0.15
+                + 0.7 * hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SALT))
+                / knot_count as f64;
+            let radius = outer_radius
+                * (KNOT_INNER_SHARE
+                    + (KNOT_OUTER_SHARE - KNOT_INNER_SHARE) * share.powf(spacing_power));
+            let glow = hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SHAPE_SALT).powf(1.4);
             let spread =
-                0.55 + 0.9 * hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SHAPE_SALT ^ 1);
+                0.5 + 1.1 * hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SHAPE_SALT ^ 1);
             let mut angle = arm_centerline(radius, arm_index, pose.arm_phase, scale);
             let on_branch = shape.branch_strength > 0.0
-                && radius > branch_start
-                && radius < branch_end
+                && branch_band(radius, arm_length, scale) > 0.0
                 && hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SALT ^ 1) < 0.32;
             if on_branch {
                 angle += shape.branch_offset;
@@ -626,6 +712,7 @@ fn seeded_star_knots(identity_seed: u64, pose: &GalaxyPose, scale: f64) -> Vec<S
                 * KNOT_SCATTER_PIXELS
                 * scale
                 / radius;
+            total_glow += glow;
             knots.push(StarKnot {
                 radius,
                 angle,
@@ -633,8 +720,9 @@ fn seeded_star_knots(identity_seed: u64, pose: &GalaxyPose, scale: f64) -> Vec<S
                 spread,
             });
         }
+        arm_knots.push(ArmKnots { knots, total_glow });
     }
-    knots
+    arm_knots
 }
 
 fn paint_stars(
@@ -652,51 +740,39 @@ fn paint_stars(
         star_count,
     } = *starfield;
     let star_outer_radius = starfield_outer_radius(scale);
-    let knots = seeded_star_knots(identity_seed, pose, scale);
-    // Cumulative population weights, so a knot gathers as many stars as its seeded
-    // glow says and no two knots hold the same count.
-    let mut cumulative = [[0.0_f64; KNOTS_PER_ARM]; PRIMARY_ARM_COUNT];
-    for (arm_index, row) in cumulative.iter_mut().enumerate() {
-        let mut total = 0.0;
-        for (knot_index, weight) in row.iter_mut().enumerate() {
-            total += knots[arm_index * KNOTS_PER_ARM + knot_index].glow;
-            *weight = total;
-        }
-    }
+    let arm_knots = seeded_star_knots(identity_seed, pose, scale);
     let mut rng = SeededRng::new(identity_seed ^ STARFIELD_SALT);
     for star_index in 0..star_count {
         let twinkle = motion::twinkle_scale(identity_seed, star_index, frame_index, state);
-        let (radius, angle, glow, spread) = if rng.unit() < ARM_STAR_SHARE {
-            let arm_index =
-                ((rng.unit() * PRIMARY_ARM_COUNT as f64) as usize).min(PRIMARY_ARM_COUNT - 1);
-            let pick = rng.unit() * cumulative[arm_index][KNOTS_PER_ARM - 1];
-            let knot_index = cumulative[arm_index]
-                .iter()
-                .position(|weight| pick <= *weight)
-                .unwrap_or(KNOTS_PER_ARM - 1);
-            let knot = knots[arm_index * KNOTS_PER_ARM + knot_index];
+        let star_knot = if rng.unit() < ARM_STAR_SHARE {
+            let arm_index = (rng.unit() * PRIMARY_ARM_COUNT as f64) as usize;
+            let arm = &arm_knots[arm_index];
+            let knot = arm.knot_at(rng.unit() * arm.total_glow);
             // Two uniforms subtracted give a triangular offset, so most stars stay
             // close to their knot center and a few trail off into a short chain.
             let along =
                 (rng.unit() - rng.unit()) * (CHAIN_SCATTER_PIXELS * scale).max(0.3) * knot.spread;
             let across =
                 (rng.unit() - rng.unit()) * (KNOT_SCATTER_PIXELS * scale).max(0.25) * knot.spread;
-            (
-                (knot.radius + along).max(0.0),
-                knot.angle + across / knot.radius.max(1.0),
-                knot.glow,
-                knot.spread,
-            )
+            StarKnot {
+                radius: (knot.radius + along).max(0.0),
+                angle: knot.angle + across / knot.radius.max(1.0),
+                ..knot
+            }
         } else {
-            (
-                star_outer_radius * rng.unit().powf(0.9),
-                rng.unit() * TAU,
-                0.4,
-                1.0,
-            )
+            StarKnot {
+                radius: star_outer_radius * rng.unit().powf(0.9),
+                angle: rng.unit() * TAU,
+                glow: 0.4,
+                spread: 1.0,
+            }
         };
-        let peak = (0.24 + 0.66 * glow) * (0.7 + 0.6 * rng.unit()) * twinkle;
-        let sigma = (0.5 + 0.3 * rng.unit()) * (0.8 + 0.35 * spread);
+        // The palette ramps to a ceiling, so a brighter splat would only widen a
+        // saturated block; glow and spread carry the knot's brightness instead.
+        let peak = ((0.3 + 0.55 * star_knot.glow) * (0.7 + 0.6 * rng.unit()) * twinkle).min(1.0);
+        let sigma = (0.55 + 0.3 * rng.unit())
+            * (1.1 - 0.3 * star_knot.glow)
+            * (0.8 + 0.3 * star_knot.spread);
         let star_pigment = if !pigment_shares.is_empty()
             && hash_unit(identity_seed, star_index as i64, 0, PIGMENT_STAR_SALT)
                 < PIGMENT_STAR_FRACTION
@@ -708,7 +784,10 @@ fn paint_stars(
         } else {
             None
         };
-        let [screen_x, screen_y] = pose.to_screen(radius * angle.cos(), radius * angle.sin());
+        let [screen_x, screen_y] = pose.to_screen(
+            star_knot.radius * star_knot.angle.cos(),
+            star_knot.radius * star_knot.angle.sin(),
+        );
         let center_x = CENTER_PIXELS + screen_x;
         let center_y = CENTER_PIXELS + screen_y;
         splat_gaussian(brightness, center_x, center_y, sigma, peak);
