@@ -85,6 +85,22 @@ const ARM_SHAPE_SALT: u64 = 0x4152_4d53_4841_5045;
 const ARM_TEXTURE_SALT: u64 = 0x4152_4d54_4558_5452;
 const RIM_SALT: u64 = 0x5249_4d46_4144_4553;
 
+/// Share of stars grouped into knots along the primary arms; the rest fill the faint
+/// disc and outer rim.
+const ARM_STAR_SHARE: f64 = 0.78;
+/// Knots per primary arm. Their radii and populations are seeded, so the spacing is
+/// never equal.
+const KNOTS_PER_ARM: usize = 5;
+/// Lateral scatter of a knot's stars around the arm centerline, in disc pixels.
+const KNOT_SCATTER_PIXELS: f64 = 0.95;
+/// Scatter along the arm, so a knot reads as a short chain rather than a dot.
+const CHAIN_SCATTER_PIXELS: f64 = 1.8;
+/// Seed salts keep the star field, its knot centers, and their shapes independent of
+/// the arm shapes, texture, and rim.
+const STARFIELD_SALT: u64 = 0x5354_4152_4649_454c;
+const STAR_KNOT_SALT: u64 = 0x4b4e_4f54_5345_4544;
+const STAR_KNOT_SHAPE_SALT: u64 = 0x4b4e_4f54_5348_4150;
+
 /// Share of stars whose core takes a pigment color; the rest stay in the colorway.
 const PIGMENT_STAR_FRACTION: f64 = 0.42;
 /// A star core carries its pigment only inside this share of its peak brightness.
@@ -565,6 +581,62 @@ fn splat_gaussian(brightness: &mut [f64], center_x: f64, center_y: f64, sigma: f
     }
 }
 
+/// One seeded knot of stars on a primary arm, or on that arm's short outer branch.
+#[derive(Clone, Copy)]
+struct StarKnot {
+    /// Disc radius of the knot's center.
+    radius: f64,
+    /// Disc angle of the knot's center.
+    angle: f64,
+    /// Population and brightness weight: a few knots are dense and bright, most faint.
+    glow: f64,
+    /// Spread multiplier, so knots vary between tight and loose.
+    spread: f64,
+}
+
+/// Every primary arm's knots for the seeded pose. Knot radii, populations, and branch
+/// placement use their own seed salts, so changing the arm shape or texture leaves the
+/// star field unchanged. Radii are seeded independently, never at equal intervals.
+fn seeded_star_knots(identity_seed: u64, pose: &GalaxyPose, scale: f64) -> Vec<StarKnot> {
+    let outer_radius = starfield_outer_radius(scale);
+    let mut knots = Vec::with_capacity(PRIMARY_ARM_COUNT * KNOTS_PER_ARM);
+    for (arm_index, shape) in pose.arm_shapes.iter().enumerate() {
+        let arm_row = arm_index as i64 * 11;
+        let arm_length = ARM_FALLOFF_RADIUS * scale * shape.reach;
+        let branch_start = arm_length * 0.42;
+        let branch_end = arm_length * 0.98;
+        for knot_index in 0..KNOTS_PER_ARM {
+            let knot_row = knot_index as i64;
+            let radius_share = hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SALT);
+            let radius = outer_radius * (0.16 + 0.82 * radius_share.powf(0.9));
+            let glow = 0.32
+                + 1.7 * hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SHAPE_SALT).powi(3);
+            let spread =
+                0.55 + 0.9 * hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SHAPE_SALT ^ 1);
+            let mut angle = arm_centerline(radius, arm_index, pose.arm_phase, scale);
+            let on_branch = shape.branch_strength > 0.0
+                && radius > branch_start
+                && radius < branch_end
+                && hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SALT ^ 1) < 0.32;
+            if on_branch {
+                angle += shape.branch_offset;
+            }
+            angle += (hash_unit(identity_seed, arm_row, knot_row, STAR_KNOT_SALT ^ 2) - 0.5)
+                * 2.0
+                * KNOT_SCATTER_PIXELS
+                * scale
+                / radius;
+            knots.push(StarKnot {
+                radius,
+                angle,
+                glow,
+                spread,
+            });
+        }
+    }
+    knots
+}
+
 fn paint_stars(
     brightness: &mut [f64],
     tint: &mut [Option<Pigment>],
@@ -580,13 +652,51 @@ fn paint_stars(
         star_count,
     } = *starfield;
     let star_outer_radius = starfield_outer_radius(scale);
-    let mut rng = SeededRng::new(pose.texture_seed);
+    let knots = seeded_star_knots(identity_seed, pose, scale);
+    // Cumulative population weights, so a knot gathers as many stars as its seeded
+    // glow says and no two knots hold the same count.
+    let mut cumulative = [[0.0_f64; KNOTS_PER_ARM]; PRIMARY_ARM_COUNT];
+    for (arm_index, row) in cumulative.iter_mut().enumerate() {
+        let mut total = 0.0;
+        for (knot_index, weight) in row.iter_mut().enumerate() {
+            total += knots[arm_index * KNOTS_PER_ARM + knot_index].glow;
+            *weight = total;
+        }
+    }
+    let mut rng = SeededRng::new(identity_seed ^ STARFIELD_SALT);
     for star_index in 0..star_count {
-        let radius = star_outer_radius * rng.unit().powf(1.35);
-        let angle = rng.unit() * TAU;
-        let peak = (0.25 + 0.75 * rng.unit().powi(2))
-            * motion::twinkle_scale(identity_seed, star_index, frame_index, state);
-        let sigma = 0.55 + 0.55 * rng.unit();
+        let twinkle = motion::twinkle_scale(identity_seed, star_index, frame_index, state);
+        let (radius, angle, glow, spread) = if rng.unit() < ARM_STAR_SHARE {
+            let arm_index =
+                ((rng.unit() * PRIMARY_ARM_COUNT as f64) as usize).min(PRIMARY_ARM_COUNT - 1);
+            let pick = rng.unit() * cumulative[arm_index][KNOTS_PER_ARM - 1];
+            let knot_index = cumulative[arm_index]
+                .iter()
+                .position(|weight| pick <= *weight)
+                .unwrap_or(KNOTS_PER_ARM - 1);
+            let knot = knots[arm_index * KNOTS_PER_ARM + knot_index];
+            // Two uniforms subtracted give a triangular offset, so most stars stay
+            // close to their knot center and a few trail off into a short chain.
+            let along =
+                (rng.unit() - rng.unit()) * (CHAIN_SCATTER_PIXELS * scale).max(0.3) * knot.spread;
+            let across =
+                (rng.unit() - rng.unit()) * (KNOT_SCATTER_PIXELS * scale).max(0.25) * knot.spread;
+            (
+                (knot.radius + along).max(0.0),
+                knot.angle + across / knot.radius.max(1.0),
+                knot.glow,
+                knot.spread,
+            )
+        } else {
+            (
+                star_outer_radius * rng.unit().powf(0.9),
+                rng.unit() * TAU,
+                0.4,
+                1.0,
+            )
+        };
+        let peak = (0.24 + 0.66 * glow) * (0.7 + 0.6 * rng.unit()) * twinkle;
+        let sigma = (0.5 + 0.3 * rng.unit()) * (0.8 + 0.35 * spread);
         let star_pigment = if !pigment_shares.is_empty()
             && hash_unit(identity_seed, star_index as i64, 0, PIGMENT_STAR_SALT)
                 < PIGMENT_STAR_FRACTION

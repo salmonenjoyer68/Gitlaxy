@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::f64::consts::TAU;
 
 use chrono::{Datelike, Days, NaiveDate};
 use gitlaxy::colorway::Colorway;
@@ -288,6 +289,78 @@ fn a_streak_snapshot_renders_byte_identical_frames() {
             );
         }
     }
+}
+
+/// Most star light sits beyond the core, so a longest streak's added stars there must
+/// gather on the three arms rather than spread evenly around the ring: their added
+/// light rises and falls with the broad arm light. Comparing two star counts isolates
+/// the stars from the disc, which never changes between the two renders.
+#[test]
+fn outer_star_knots_gather_along_the_three_arms() {
+    const BIN_COUNT: usize = 48;
+    const INNER_RADIUS: f64 = 40.0;
+    const OUTER_RADIUS: f64 = 106.0;
+    const BLUR_RADIUS: i64 = 5;
+    let short_record = development_with_streaks(0, 1);
+    let long_record = development_with_streaks(0, STAR_DENSITY_FULL_WEEKS);
+    let short_frame = render_galaxy_still(&short_record, Colorway::Blue, Theme::Dark);
+    let long_frame = render_galaxy_still(&long_record, Colorway::Blue, Theme::Dark);
+    let blue_at = |galaxy_frame: &GalaxyFrame, pixel_x: i64, pixel_y: i64| {
+        let pixels = galaxy_frame.as_rgba_bytes();
+        f64::from(
+            pixels[(pixel_y as usize * FRAME_WIDTH_PIXELS as usize + pixel_x as usize) * 4 + 2],
+        )
+    };
+    let (mut broad_light, mut star_light) = ([0.0; BIN_COUNT], [0.0; BIN_COUNT]);
+    for pixel_y in 0..i64::from(FRAME_HEIGHT_PIXELS) {
+        for pixel_x in 0..i64::from(FRAME_WIDTH_PIXELS) {
+            let offset_x = pixel_x as f64 - 128.0;
+            let offset_y = pixel_y as f64 - 128.0;
+            let radius = offset_x.hypot(offset_y);
+            if !(INNER_RADIUS..=OUTER_RADIUS).contains(&radius) {
+                continue;
+            }
+            let bin = (((offset_y.atan2(offset_x) + TAU) % TAU) / TAU * BIN_COUNT as f64) as usize
+                % BIN_COUNT;
+            // A wide box average dilutes the star splats, leaving the broad arm light.
+            let mut neighbourhood = 0.0;
+            for blur_y in -BLUR_RADIUS..=BLUR_RADIUS {
+                for blur_x in -BLUR_RADIUS..=BLUR_RADIUS {
+                    let sample_x = (pixel_x + blur_x).clamp(0, 255);
+                    let sample_y = (pixel_y + blur_y).clamp(0, 255);
+                    neighbourhood += blue_at(&long_frame, sample_x, sample_y);
+                }
+            }
+            broad_light[bin] += neighbourhood / ((2 * BLUR_RADIUS + 1).pow(2) as f64);
+            star_light[bin] += (blue_at(&long_frame, pixel_x, pixel_y)
+                - blue_at(&short_frame, pixel_x, pixel_y))
+            .abs();
+        }
+    }
+    assert!(
+        star_light.iter().sum::<f64>() > 0.0,
+        "the outer annulus gained no star light"
+    );
+    let correlation = correlation(&broad_light, &star_light);
+    assert!(
+        correlation > 0.2,
+        "added stars do not follow the arm light: correlation {correlation}"
+    );
+}
+
+fn correlation(left: &[f64], right: &[f64]) -> f64 {
+    let count = left.len() as f64;
+    let left_mean = left.iter().sum::<f64>() / count;
+    let right_mean = right.iter().sum::<f64>() / count;
+    let (mut covariance, mut left_variance, mut right_variance) = (0.0, 0.0, 0.0);
+    for (left_value, right_value) in left.iter().zip(right) {
+        let left_deviation = left_value - left_mean;
+        let right_deviation = right_value - right_mean;
+        covariance += left_deviation * right_deviation;
+        left_variance += left_deviation * left_deviation;
+        right_variance += right_deviation * right_deviation;
+    }
+    covariance / (left_variance * right_variance).sqrt()
 }
 
 /// How much light the frame's mid-disc annulus holds in one angular harmonic.
